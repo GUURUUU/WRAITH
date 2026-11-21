@@ -17,7 +17,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Android build tools + platform 23 + platform-tools
+      - name: Install Android build tools + platform-tools
         run: |
           mkdir -p $HOME/android-sdk
           cd $HOME/android-sdk
@@ -25,16 +25,27 @@ jobs:
           unzip -q bt.zip
           wget -q https://dl.google.com/android/repository/platform-tools-latest-linux.zip -O pt.zip
           unzip -q pt.zip
-          wget -q https://dl.google.com/android/repository/android-23_r02.zip -O platform.zip
-          unzip -o -q platform.zip
-          # find actual build-tools directory
-          BT_DIR=$(find $HOME/android-sdk -name "aapt" -type f 2>/dev/null | head -1 | xargs dirname)
-          echo "BT=$BT_DIR" >> $GITHUB_ENV
+          BT=$(dirname $(find $HOME/android-sdk -name aapt -type f | head -1))
+          echo "BT=$BT" >> $GITHUB_ENV
           echo "PT=$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
-          find $HOME/android-sdk -name "android.jar" -path "*/android-23/*" 2>/dev/null | head -1 > /tmp/android_jar.txt
-          echo "ANDROID_JAR=$(cat /tmp/android_jar.txt)" >> $GITHUB_ENV
-          ls -la $BT_DIR | head -15
-          cat /tmp/android_jar.txt
+          echo "BT found: $BT"
+
+      - name: Get android.jar (try platform zip, fall back to Maven)
+        run: |
+          wget -q https://dl.google.com/android/repository/android-23_r02.zip -O /tmp/platform.zip || true
+          if [ -s /tmp/platform.zip ]; then
+            (cd $HOME/android-sdk && unzip -o -q /tmp/platform.zip) || true
+          fi
+          ANDROID_JAR=$(find $HOME/android-sdk -name "android.jar" | head -1)
+          if [ -z "$ANDROID_JAR" ]; then
+            echo "no android.jar in SDK, downloading API 16 jar from Maven"
+            wget -q https://repo1.maven.org/maven2/com/google/android/android/4.1.1.4/android-4.1.1.4.jar -O /tmp/android.jar
+            ANDROID_JAR=/tmp/android.jar
+          fi
+          echo "ANDROID_JAR=$ANDROID_JAR" >> $GITHUB_ENV
+          echo "using: $ANDROID_JAR"
+          ls -la $HOME/android-sdk/
+          ls -la $(dirname "$ANDROID_JAR")
 
       - name: Compile resources and package base APK (aapt v1)
         run: |
