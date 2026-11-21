@@ -26,31 +26,33 @@ jobs:
           wget -q https://dl.google.com/android/repository/platform-tools-latest-linux.zip -O pt.zip
           unzip -q pt.zip
           wget -q https://dl.google.com/android/repository/android-23_r02.zip -O platform.zip
-          unzip -o -q platform.zip  # extract all, then find android.jar
-          echo "BT=$HOME/android-sdk/build-tools/33.0.2" >> $GITHUB_ENV
+          unzip -o -q platform.zip
+          # find actual build-tools directory
+          BT_DIR=$(find $HOME/android-sdk -name "aapt" -type f 2>/dev/null | head -1 | xargs dirname)
+          echo "BT=$BT_DIR" >> $GITHUB_ENV
           echo "PT=$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
-          ls -la $HOME/android-sdk/build-tools/33.0.2 | head -15
-          find $HOME/android-sdk -name "android.jar" -path "*/android-23/*" 2>/dev/null | head -1
+          find $HOME/android-sdk -name "android.jar" -path "*/android-23/*" 2>/dev/null | head -1 > /tmp/android_jar.txt
+          echo "ANDROID_JAR=$(cat /tmp/android_jar.txt)" >> $GITHUB_ENV
+          ls -la $BT_DIR | head -15
+          cat /tmp/android_jar.txt
 
       - name: Compile resources and package base APK (aapt v1)
         run: |
-          $HOME/android-sdk/build-tools/33.0.2/aapt package -f \
+          $BT/aapt package -f \
             -M AndroidManifest.xml \
             -S res \
-            -I $(find $HOME/android-sdk -name "android.jar" -path "*/android-23/*" | head -1) \
+            -I $ANDROID_JAR \
             -F base.apk
           ls -la base.apk
 
       - name: Compile Java sources
         run: |
           mkdir -p out/classes
-          javac -source 8 -target 8 \
-            -cp "$(find $HOME/android-sdk -name "android.jar" -path "*/android-23/*" | head -1)" \
-            -d out/classes src/com/brycestrosoft/liber80211/*.java
+          javac -source 8 -target 8 -cp "$ANDROID_JAR" -d out/classes src/com/brycestrosoft/liber80211/*.java
 
       - name: Convert to Dalvik bytecode (d8)
         run: |
-          $HOME/android-sdk/build-tools/33.0.2/d8 --release --output . out/classes
+          $BT/d8 --release --output . out/classes
           ls -la classes.dex
 
       - name: Add classes.dex to base APK
@@ -59,16 +61,16 @@ jobs:
 
       - name: Align APK
         run: |
-          $HOME/android-sdk/platform-tools/zipalign -p 4 base.apk app-aligned.apk
+          $PT/zipalign -p 4 base.apk app-aligned.apk
 
       - name: Create debug keystore and sign APK
         run: |
           keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
-          $HOME/android-sdk/build-tools/33.0.2/apksigner sign --ks debug.keystore --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android --out liber80211.apk app-aligned.apk
+          $BT/apksigner sign --ks debug.keystore --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android --out liber80211.apk app-aligned.apk
 
       - name: Verify APK
         run: |
-          $HOME/android-sdk/build-tools/33.0.2/apksigner verify --print-certs liber80211.apk | head -5
+          $BT/apksigner verify --print-certs liber80211.apk | head -5
           unzip -l liber80211.apk | head -15
 
       - name: Upload APK artifact
