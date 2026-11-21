@@ -26,32 +26,29 @@ jobs:
           wget -q https://dl.google.com/android/repository/platform-tools-latest-linux.zip -O pt.zip
           unzip -q pt.zip
           wget -q https://dl.google.com/android/repository/android-23_r02.zip -O platform.zip
-          unzip -o -q platform.zip "android-23/android.jar"
+          unzip -o -q platform.zip  # extract all, then find android.jar
           echo "BT=$HOME/android-sdk/build-tools/33.0.2" >> $GITHUB_ENV
           echo "PT=$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
-          ls -la $HOME/android-sdk/build-tools/33.0.2 | head -20
-          ls -la $HOME/android-sdk/platforms/android-23/
+          ls -la $HOME/android-sdk/build-tools/33.0.2 | head -15
+          find $HOME/android-sdk -name "android.jar" -path "*/android-23/*" 2>/dev/null | head -1
 
-      - name: Compile resources with aapt2
+      - name: Compile resources and package base APK (aapt v1)
         run: |
-          mkdir -p out/res
-          $HOME/android-sdk/build-tools/33.0.2/aapt2 compile --dir res -o out/res
-          find out/res -type f
-
-      - name: Link resources + manifest into base APK
-        run: |
-          $HOME/android-sdk/build-tools/33.0.2/aapt2 link -o base.apk \
-            --manifest AndroidManifest.xml \
-            -I $HOME/android-sdk/platforms/android-23/android.jar \
-            -R $(find out/res -name '*.flat') \
-            --java out/gen
+          $HOME/android-sdk/build-tools/33.0.2/aapt package -f \
+            -M AndroidManifest.xml \
+            -S res \
+            -I $(find $HOME/android-sdk -name "android.jar" -path "*/android-23/*" | head -1) \
+            -F base.apk
+          ls -la base.apk
 
       - name: Compile Java sources
         run: |
           mkdir -p out/classes
-          javac -source 8 -target 8 -cp "out/gen:$HOME/android-sdk/platforms/android-23/android.jar" -d out/classes src/com/brycestrosoft/liber80211/*.java
+          javac -source 8 -target 8 \
+            -cp "$(find $HOME/android-sdk -name "android.jar" -path "*/android-23/*" | head -1)" \
+            -d out/classes src/com/brycestrosoft/liber80211/*.java
 
-      - name: Convert to Dalvik bytecode
+      - name: Convert to Dalvik bytecode (d8)
         run: |
           $HOME/android-sdk/build-tools/33.0.2/d8 --release --output . out/classes
           ls -la classes.dex
