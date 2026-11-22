@@ -56,6 +56,9 @@ jobs:
             -I $ANDROID_JAR \
             -J out/gen \
             -F base.apk
+          # aapt writes R.java flat into out/gen; move it into its package dir
+          mkdir -p out/gen/com/brycestrosoft/liber80211
+          [ -f out/gen/R.java ] && mv out/gen/R.java out/gen/com/brycestrosoft/liber80211/R.java || true
           ls -la base.apk
           find out/gen -name R.java
 
