@@ -67,7 +67,6 @@ jobs:
       - name: Convert to Dalvik bytecode (d8)
         run: |
           $BT/d8 --release 8 -o classes.dex out/classes
-          ls -la classes.dex
 
       - name: Add classes.dex to base APK
         run: |
@@ -80,7 +79,7 @@ jobs:
       - name: Create debug keystore and sign APK
         run: |
           keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
-          $BT/apksigner sign --ks debug.keystore --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android --out liber80211.apk app-aligned.apk
+          $BT/apksigner sign --ks debug.keystore --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass android --out liber80211.apk app-aligned.apk
 
       - name: Verify APK
         run: |
