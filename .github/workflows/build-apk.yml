@@ -29,6 +29,7 @@ jobs:
           echo "BT=$BT" >> $GITHUB_ENV
           echo "PT=$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
           echo "BT found: $BT"
+          ls -la $BT/d8 $BT/dx 2>/dev/null || true
 
       - name: Get android.jar (try platform zip, fall back to Maven)
         run: |
@@ -64,9 +65,12 @@ jobs:
           mkdir -p out/classes
           javac -source 8 -target 8 -cp "out/gen:$ANDROID_JAR" -d out/classes src/com/brycestrosoft/liber80211/*.java
 
-      - name: Convert to Dalvik bytecode (d8)
+      - name: Convert to Dalvik bytecode (d8 via jar)
         run: |
-          $BT/d8 --release 8 -o classes.dex out/classes
+          jar cf classes.jar -C out/classes .
+          ls -la classes.jar
+          $BT/d8 classes.jar
+          ls -la *.dex
 
       - name: Add classes.dex to base APK
         run: |
@@ -79,7 +83,7 @@ jobs:
       - name: Create debug keystore and sign APK
         run: |
           keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
-          $BT/apksigner sign --ks debug.keystore --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass android --out liber80211.apk app-aligned.apk
+          $BT/apksigner sign --ks debug.keystore --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android --out liber80211.apk app-aligned.apk
 
       - name: Verify APK
         run: |
