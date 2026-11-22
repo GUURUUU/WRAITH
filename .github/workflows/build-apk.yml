@@ -44,8 +44,6 @@ jobs:
           fi
           echo "ANDROID_JAR=$ANDROID_JAR" >> $GITHUB_ENV
           echo "using: $ANDROID_JAR"
-          ls -la $HOME/android-sdk/
-          ls -la $(dirname "$ANDROID_JAR")
 
       - name: Compile resources and package base APK (aapt v1)
         run: |
@@ -56,7 +54,6 @@ jobs:
             -I $ANDROID_JAR \
             -J out/gen \
             -F base.apk
-          # aapt writes R.java flat into out/gen; move it into its package dir
           mkdir -p out/gen/com/brycestrosoft/liber80211
           [ -f out/gen/R.java ] && mv out/gen/R.java out/gen/com/brycestrosoft/liber80211/R.java || true
           ls -la base.apk
@@ -69,7 +66,7 @@ jobs:
 
       - name: Convert to Dalvik bytecode (d8)
         run: |
-          $BT/d8 --release --output . out/classes
+          $BT/d8 --release 8 -o classes.dex out/classes
           ls -la classes.dex
 
       - name: Add classes.dex to base APK
