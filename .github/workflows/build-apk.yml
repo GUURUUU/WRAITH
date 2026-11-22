@@ -78,7 +78,7 @@ jobs:
 
       - name: Align APK
         run: |
-          $PT/zipalign -p 4 base.apk app-aligned.apk
+          $BT/zipalign -p 4 base.apk app-aligned.apk
 
       - name: Create debug keystore and sign APK
         run: |
