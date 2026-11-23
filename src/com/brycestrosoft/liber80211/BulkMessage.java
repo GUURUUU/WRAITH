@@ -20,7 +20,9 @@ public class BulkMessage {
 	ByteBuffer _buff;
 	
 	public BulkMessage(int size) {
-		_buff = ByteBuffer.allocate(size);
+		// UsbRequest.queue() hands the buffer straight to the kernel driver, so it
+		// must be a direct buffer on current Android releases.
+		_buff = ByteBuffer.allocateDirect(size);
 	}
 	
 	// queue the read, returning flag indicating whether it queued successfully
@@ -31,5 +33,25 @@ public class BulkMessage {
 	
 	public ByteBuffer getByteBuffer() {
 		return _buff;
+	}
+
+	// Number of bytes the hardware actually delivered for this transfer. Android sets
+	// the buffer's limit to the transferred length when the request completes; if it
+	// did not, fall back to the full buffer.
+	public int getLength() {
+		int limit = _buff.limit();
+		if (limit > 0 && limit <= _buff.capacity()) {
+			return limit;
+		}
+		return _buff.capacity();
+	}
+
+	// Direct buffers have no backing array, so copy the received bytes out for parsing.
+	public byte[] getBytes() {
+		ByteBuffer copy = _buff.duplicate();
+		copy.clear();
+		byte[] bytes = new byte[copy.remaining()];
+		copy.get(bytes);
+		return bytes;
 	}
 }

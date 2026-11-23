@@ -7,7 +7,12 @@
 
     <uses-sdk
         android:minSdkVersion="23"
-        android:targetSdkVersion="23" />
+        android:targetSdkVersion="24" />
+
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Legacy target, so this still grants write access to the public capture dir
+         (/sdcard/liber80211) that Termux and other apps can read. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
     <application
         android:icon="@drawable/ic_launcher"
@@ -44,8 +49,8 @@
         </activity>
     </application>
 
-    <!-- Removed: WRITE_EXTERNAL_STORAGE (log now goes to app-private dir)
-         and ACCESS_FINE_LOCATION (never runtime-requested; threw SecurityException
-         once targetSdk moved to 23). -->
+    <!-- Logs go to the app-specific external dir (getExternalFilesDir), which needs
+         no storage permission. ACCESS_FINE_LOCATION is requested at runtime and is
+         only used for the GPS-tagged log; capture works without it. -->
 
 </manifest>

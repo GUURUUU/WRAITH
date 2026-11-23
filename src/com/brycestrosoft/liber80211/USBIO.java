@@ -308,22 +308,10 @@ public class USBIO {
 		rtl818xWrite32(conn, 0xff08, data2);
 		rtl818xWrite32(conn, 0xff0c, data2);
 		
-		// inlined equivalent of rtl8187_init_urbs(dev);
-		// doesn't exactly mirror linux driver behaviour as we do precisely 16 iterations
-		// regardless of whether async interruptions fulfilled during loop where linux driver
-		// would enqueue another to replace it.  I think...
-	    int byteBuffLen = 2500;
-	    for (int i = 0; i < 16; i++) {
-	    	UsbRequest request = new UsbRequest();
-	    	request.initialize(conn, ep);
-	    	BulkMessage msg = new BulkMessage(byteBuffLen);
-	    	if (msg.queueRead(request)) {
-	    		writeMessage("Bulk queued successfully.\n");
-	    	}
-	    	else {
-	    		writeMessage("Bulk queue failed.\n");
-	    	}
-	    }
+		// RxThread performs synchronous bulk reads on this endpoint directly, so there is
+		// no ring of queued UsbRequests here (the two would compete for frames and the
+		// async API doesn't report received lengths).
+		writeMessage("Starting RX thread.\n");
 	    
 		RxThread wt = new RxThread(conn/*, buff*/, parentActivity, ep);
 		wt.messages = messages;
@@ -374,14 +362,13 @@ public class USBIO {
 
 	// Write to the messages textview
 	private static void writeMessage(String message) {
-		if (do_log == true) {
+		if (do_log == true && file_messages != null) {
 			//messages.append(/*System.nanoTime() + ":" + */message); // comment this line out to stop writing messages to textview
 			try {
 				file_messages.write(System.currentTimeMillis() + "\t" + message);
 			} catch (IOException e) {
-				messages.append("failed to write to file.\n");
-				// TODO Auto-generated catch block
-				e.printStackTrace();
+				// nothing useful to do here, and appending to the TextView from a
+				// background thread would not be safe anyway
 			}
 		}
 	}

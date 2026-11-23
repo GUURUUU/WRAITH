@@ -1,1 +1,6 @@
 *.git
+build/
+*.apk
+*.idsig
+*.keystore
+*.dex

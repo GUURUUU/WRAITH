@@ -39,6 +39,9 @@ public class RxThread implements Runnable {
 	public OutputStreamWriter fileMessages;
 	private Set<String> _seen_macs;
 	private Set<String> _seen_essids;
+
+	private static final int BUFFER_SIZE = 2500;
+	private static final int BULK_TIMEOUT_MS = 1000;
 	public RxThread(UsbDeviceConnection conn, Activity parentActivity, UsbEndpoint ep) {
 		_conn = conn;
 		_parent_activity = parentActivity;
@@ -48,31 +51,29 @@ public class RxThread implements Runnable {
 	}
 	public void run() {
 		try {
+			// Synchronous bulk reads are used rather than a ring of UsbRequests because
+			// bulkTransfer() reports the exact number of bytes received, which we need in
+			// order to write correctly sized frames to the pcap capture.
+			byte[] buffer = new byte[BUFFER_SIZE];
 			while (stop_thread == false) {
-				UsbRequest req = _conn.requestWait();
-				if (req == null) {
-					break;
+				int length = _conn.bulkTransfer(_ep, buffer, buffer.length, BULK_TIMEOUT_MS);
+				if (length <= 0) {
+					// timeout or error; keep polling unless we've been asked to stop
+					continue;
 				}
 
-				ByteBuffer data = ((BulkMessage)req.getClientData()).getByteBuffer();
+				byte[] data = Arrays.copyOf(buffer, length);
+				PcapWriter.write(data, length);
 
-				StringBuilder data_as_hex = new StringBuilder();
-				for (byte b : data.array()) {
-					data_as_hex.append(String.format("%02x", b));
-				}
-				
-				// uncomment to write out the full hex string received from the USB peripheral.
-				//writeMessage("***\n" + data_as_hex.toString() + "\n***\n", _parent_activity, true);
-				
-				if (extract_frame_control(data.array()).equals("8000")) {
+				if (extract_frame_control(data).equals("8000")) {
 					boolean show_log_on_screen = true;
-					String beacon_bssid = extractBssid(data.array());
-					String beacon_essid = extractEssid(data.array());
+					String beacon_bssid = extractBssid(data);
+					String beacon_essid = extractEssid(data);
 					write_message(String.format("BEACON\t%s\t%s.\n", beacon_bssid, beacon_essid), _parent_activity, show_log_on_screen);
 				}
-				else if (extract_frame_control(data.array()).equals("4000")) {
-					String probe_request_sender_MAC = extract_probe_request_sender_MAC(data.array());
-					String probe_request_essid = extract_probe_request_essid(data.array());
+				else if (extract_frame_control(data).equals("4000")) {
+					String probe_request_sender_MAC = extract_probe_request_sender_MAC(data);
+					String probe_request_essid = extract_probe_request_essid(data);
 					boolean show_log_on_screen = true;
 					// uncomment if you want to restrict printing on screen to only new MACs/ESSIDs
 					/*boolean showLogOnScreen = false;
@@ -87,20 +88,6 @@ public class RxThread implements Runnable {
 					write_message(String.format("PROBE REQUEST\t%s\t%s.\n", probe_request_sender_MAC, probe_request_essid),
 							_parent_activity, show_log_on_screen);
 				}
-				
-				// enqueue another bulk read to replace the one we just received
-				int byte_buff_len = 2500; // TODO: factor this out as we use a duplicate variable name/value in USBIO.java.
-				UsbRequest request = new UsbRequest();
-				request.initialize(_conn, _ep);
-				BulkMessage msg = new BulkMessage(byte_buff_len);
-				if (msg.queueRead(request)) {
-					//writeMessage("Replacement bulk queued successfully.\n", _parent_activity, true);
-				}
-				else {
-					//writeMessage("Replacement bulk queue failed.\n", _parent_activity, true);
-				}
-				
-				//writeMessage("Destination address is: " + extractDestinationAddress(data.array()) + "\n", _parent_activity, true);
 			}
 			write_message("About to exit run()\n", _parent_activity);
 		}
@@ -172,17 +159,14 @@ public class RxThread implements Runnable {
 				}
 			});
 		}
-		//if (doLog == true) {
+		if (fileMessages != null) {
 			try {
 				fileMessages.write(System.currentTimeMillis() + "\t" + message);
+				fileMessages.flush();
 			} catch (IOException e) {
-				//TODO: add some toast here to display a message that the I/O buggered up.
-				//fileMessages.write("failed to write to file.\n");
-				//messages.append("failed to write to file.\n");
-				// TODO Auto-generated catch block
-				e.printStackTrace();
+				// nothing useful to do here
 			}
-		//}
+		}
 	}
 	
 	public void stopThread() {
