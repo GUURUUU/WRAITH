@@ -10,6 +10,14 @@ liber80211 (pronounced *liberate-0211*) is an Android app that **supports Wi-Fi 
 ## How does it work?
 Android 3.0 added support for [USB On-The-Go](http://en.wikipedia.org/wiki/USB_On-The-Go) (a.k.a. USB OTG, USB Host Mode) which allows the Android phone to act as the host computer and the plugged in USB device to act as the peripheral.  liber80211 is an Android user space port of the ALFA AWUS036H's kernel space Linux driver.  In other words, liber80211 mimics the behaviour of the Linux driver on the wire and the ALFA AWUS036H knows no different.
 
+## Does the adapter replace my phone's Wi-Fi?
+No, and it does not conflict with it either.  liber80211 is a user space driver, so the ALFA never becomes a network interface the Android system knows about: it gets no IP address, no DHCP lease and no connection request.  Your phone's built-in Wi-Fi (or mobile data) therefore stays exactly as it was, and you can leave it connected to a network for internet access while the ALFA sits in monitor mode receiving frames.  Both radios were verified working simultaneously on a Galaxy A15 running Android 16.
+
+The flip side of that design: the ALFA cannot be used as an internet adapter.  Connecting it to a Wi-Fi network as a client would need a kernel driver registered with Android's network stack (and root), which this project does not have.
+
+## Where do captures go?
+Frames are written to `/sdcard/liber80211/capture.pcap` (libpcap, link type 105: raw 802.11 with no radiotap header) alongside a text log of the beacons and probe requests seen.  Termux can read both after `termux-setup-storage`, e.g. `pkg install tshark && tshark -r /sdcard/liber80211/capture.pcap`.
+
 ## What do I need to get started?
 1. An [ALFA AWUS036H](http://www.amazon.com/gp/product/B000QYGNKQ/ref=as_li_qf_sp_asin_il_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B000QYGNKQ&linkCode=as2&tag=liber80211-20).
 2. A [USB OTG Cable](http://www.amazon.com/gp/product/B005QX7KYU/ref=as_li_qf_sp_asin_il_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B005QX7KYU&linkCode=as2&tag=liber80211-20)
