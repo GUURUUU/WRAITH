@@ -358,6 +358,79 @@ public class USBIO {
 	
 
 
+	/*
+	 * Writes a line to the capture log.  Public so the injection socket can
+	 * report what it did alongside the frames the RX thread logs.
+	 */
+	public static void log(String message) {
+		writeMessage(message);
+	}
+
+	/*
+	 * 802.11 rates as the RTL8187 numbers them: 0-3 are CCK 1/2/5.5/11 Mbps and
+	 * 4-11 are OFDM 6..54 Mbps.  Management frames a target is expected to act on
+	 * have to go out at a basic rate, 1 Mbps being the most widely received.
+	 */
+	public static final int RATE_1M = 0;
+
+	// rtl8225_chan[] from rtl8225.c, the synthesiser word for channels 1..14.
+	private static final int[] RTL8225_CHANNEL_WORDS = { 0x085c, 0x08dc, 0x095c,
+			0x09dc, 0x0a5c, 0x0adc, 0x0b5c, 0x0bdc, 0x0c5c, 0x0cdc, 0x0d5c,
+			0x0ddc, 0x0e5c, 0x0f72 };
+
+	public static volatile int current_channel = 0;
+
+	/*
+	 * Retunes the radio, mirroring rtl8225_rf_set_channel() from rtl8225.c.
+	 * Only the synthesiser write is done: the per-channel TX power correction is
+	 * a few tenths of a dB and is not worth the dozens of extra register writes
+	 * on every hop.  RF writes only work on cards whose ASIC revision exposes the
+	 * USB request path, which is the case for the AWUS036H this port targets.
+	 */
+	public static boolean rtl8187_set_channel(UsbDeviceConnection conn, int channel) {
+		if (conn == null || channel < 1 || channel > RTL8225_CHANNEL_WORDS.length) {
+			return false;
+		}
+		rtl8225Write(conn, 0x7, ByteBuffer.allocate(2)
+				.putShort((short) RTL8225_CHANNEL_WORDS[channel - 1]).array());
+		milliSleep(10);
+		current_channel = channel;
+		writeMessage("Tuned to channel " + channel + ".\n");
+		return true;
+	}
+
+	/*
+	 * Transmit one 802.11 frame.  The frame must not carry an FCS: the hardware
+	 * appends it.  This mirrors rtl8187_tx() in dev.c, which prepends a 12 byte
+	 * descriptor (flags, rts_duration, len, retry) and bulk-transfers the lot to
+	 * endpoint 2.  RTS/CTS is left off: injected management frames are broadcast
+	 * or unicast to a peer that is not going to answer an RTS anyway.
+	 *
+	 * Returns the number of bytes the device accepted, or a negative value.
+	 */
+	public static int rtl8187_tx(UsbDeviceConnection conn, UsbEndpoint out,
+			byte[] frame, int rate) {
+		if (conn == null || out == null || frame == null
+				|| frame.length < 10 || frame.length > 1700) {
+			return -1;
+		}
+		int flags = frame.length | (1 << 15) /* RTL818X_TX_DESC_FLAG_NO_ENC */
+				| ((rate & 0x0f) << 24);
+		byte[] packet = new byte[12 + frame.length];
+		packet[0] = (byte) (flags & 0xff);
+		packet[1] = (byte) ((flags >> 8) & 0xff);
+		packet[2] = (byte) ((flags >> 16) & 0xff);
+		packet[3] = (byte) ((flags >> 24) & 0xff);
+		// packet[4..5] rts_duration = 0, packet[6..7] len = 0,
+		// packet[8..11] retry = 0 (a single attempt), all left zeroed.
+		System.arraycopy(frame, 0, packet, 12, frame.length);
+
+		int sent = conn.bulkTransfer(out, packet, packet.length, 500);
+		writeMessage(String.format("TX %d byte frame (rate index %d): %d bytes accepted\n",
+				frame.length, rate, sent));
+		return sent;
+	}
+
 	// PRIVATE USB I/O METHODS //
 
 	// Write to the messages textview

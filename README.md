@@ -18,6 +18,35 @@ The flip side of that design: the ALFA cannot be used as an internet adapter.  C
 ## Where do captures go?
 Frames are written to `/sdcard/liber80211/capture.pcap` (libpcap, link type 105: raw 802.11 with no radiotap header) alongside a text log of the beacons and probe requests seen.  Termux can read both after `termux-setup-storage`, e.g. `pkg install tshark && tshark -r /sdcard/liber80211/capture.pcap`.
 
+## Can I inject packets from Termux?
+Yes.  The app owns the adapter's transmit path (12 byte RTL8187 descriptor on bulk OUT endpoint 2, as `rtl8187_tx()` does in the Linux driver) and hands it to the rest of the phone over a loopback socket:
+
+    liber80211 app  -> 127.0.0.1:8765  -> tools/liber80211-inject.py
+
+The socket is bound to `127.0.0.1`, so nothing outside the device can reach it.  Bring the app up with the adapter attached, then in Termux:
+
+    pkg install python
+    python tools/liber80211-inject.py channel 6
+    python tools/liber80211-inject.py deauth AA:BB:CC:DD:EE:FF
+    python tools/liber80211-inject.py --help
+
+Available commands are `channel`, `status`, `deauth`, `beacon`, `raw` and `replay`.  `replay` sends the frames of a capture written by this app (or any 802.11 pcap, radiotap included) back out of the radio.  `raw` takes a hexadecimal frame:
+
+    python tools/liber80211-inject.py raw c0000000aabbccddeeff... 
+
+Frames leave at 1 Mbit/s, a basic rate every 802.11 client has to understand; management frames at other rates are frequently ignored.  Anything transmitted is logged in `/sdcard/liber80211/` next to the received frames.
+
+Writing your own client is a handful of bytes.  One request per message on TCP 8765, one status byte back unless noted:
+
+| Command | Request | Reply |
+| --- | --- | --- |
+| 1 TX | u16 big-endian length, then the 802.11 frame without FCS | 0 transmitted, 1 rejected |
+| 2 channel | u8, 1..14 | 0 ok, 1 invalid |
+| 3 ping | - | 0 |
+| 4 status | - | u32 frames transmitted, u8 channel |
+
+**aireplay-ng and its friends will not work.**  They open a monitor-mode *interface* through libpcap, and a user space driver offers no interface to open — that is the same design decision that lets this work without root.  Use the tool above, or speak the protocol, for deauth, beacon and replay work.
+
 ## What do I need to get started?
 1. An [ALFA AWUS036H](http://www.amazon.com/gp/product/B000QYGNKQ/ref=as_li_qf_sp_asin_il_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B000QYGNKQ&linkCode=as2&tag=liber80211-20).
 2. A [USB OTG Cable](http://www.amazon.com/gp/product/B005QX7KYU/ref=as_li_qf_sp_asin_il_tl?ie=UTF8&camp=1789&creative=9325&creativeASIN=B005QX7KYU&linkCode=as2&tag=liber80211-20)

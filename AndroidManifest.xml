@@ -13,6 +13,10 @@
     <!-- Legacy target, so this still grants write access to the public capture dir
          (/sdcard/liber80211) that Termux and other apps can read. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <!-- Needed to open the loopback socket that carries injected frames from
+         Termux. The socket is bound to 127.0.0.1 only; the app makes no network
+         connections of its own. -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:icon="@drawable/ic_launcher"

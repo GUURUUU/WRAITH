@@ -57,6 +57,7 @@ public class MainActivity extends Activity {
     private File _capture_dir;
 
     private volatile RxThread _rx;
+    private volatile InjectServer _inject;
     private volatile UsbDeviceConnection _conn;
     private volatile UsbInterface _intf_0;
     private TextView _txt_general_info;
@@ -254,12 +255,36 @@ public class MainActivity extends Activity {
                     USBIO.rtl8187_add_interface(conn, DeviceProperties.mac);
 
                     show_device_info(device);
+
+                    // The adapter isn't a network interface, so hand the transmit path
+                    // to anything running on the phone over a loopback socket.
+                    UsbEndpoint out = pick_tx_endpoint(intf);
+                    if (out != null) {
+                        _inject = new InjectServer(conn, out);
+                        new Thread(_inject, "liber80211-inject").start();
+                        append_message("TX endpoint: address=0x" + Integer.toHexString(out.getAddress())
+                                + " - injection on 127.0.0.1:" + InjectServer.PORT + "\n");
+                    } else {
+                        append_message("No bulk OUT endpoint found, injection disabled.\n");
+                    }
+
                     append_message("Monitor mode started. Listening for frames...\n");
                 } catch (Exception e) {
                     append_message(describe(e));
                 }
             }
         }, "liber80211-init").start();
+    }
+
+    private static UsbEndpoint pick_tx_endpoint(UsbInterface intf) {
+        for (int i = 0; i < intf.getEndpointCount(); i++) {
+            UsbEndpoint ep = intf.getEndpoint(i);
+            if (ep.getType() == UsbConstants.USB_ENDPOINT_XFER_BULK
+                    && ep.getDirection() == UsbConstants.USB_DIR_OUT) {
+                return ep;
+            }
+        }
+        return null;
     }
 
     private static UsbEndpoint pick_rx_endpoint(UsbInterface intf) {
@@ -379,6 +404,9 @@ public class MainActivity extends Activity {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        if (_inject != null) {
+            _inject.stop();
+        }
         if (_rx != null) {
             _rx.stopThread();
         }
