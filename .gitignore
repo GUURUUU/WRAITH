@@ -4,3 +4,4 @@ build/
 *.idsig
 *.keystore
 *.dex
+__pycache__/
