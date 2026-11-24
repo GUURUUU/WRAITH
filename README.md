@@ -40,7 +40,8 @@ supported.
 
 ## Install
 
-The app is built locally into `wraith.apk`:
+Download `wraith.apk` from [Releases](https://github.com/GUURUUU/WRAITH/releases/latest),
+or build it locally (see [docs/BUILDING.md](docs/BUILDING.md)), then:
 
 ```bash
 adb install -r wraith.apk
