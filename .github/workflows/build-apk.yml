@@ -19,12 +19,13 @@ jobs:
           java-version: '17'
 
       # Same tools as the documented local build (docs/BUILDING.md).
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install build tools and platform
         run: |
-          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" > /dev/null
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER=$(command -v sdkmanager || find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f | head -1)
+          echo "sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0" > /dev/null
           BT="$ANDROID_HOME/build-tools/35.0.0"
           JAR="$ANDROID_HOME/platforms/android-35/android.jar"
           test -x "$BT/aapt" && test -f "$JAR"
