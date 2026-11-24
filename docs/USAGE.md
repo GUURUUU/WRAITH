@@ -1,9 +1,9 @@
-# Using liber80211
+# Using WRAITH
 
 ## First run
 
 1. Plug the ALFA into the phone through the OTG cable.
-2. Launch liber80211. It asks for USB access to the card (allow it), and
+2. Launch WRAITH. It asks for USB access to the card (allow it), and
    optionally for location and storage.
 3. The status panel turns to `capturing` within a few seconds. The probe is
    slow by design: it bit-bangs the card's EEPROM over thousands of USB control
@@ -19,7 +19,7 @@ powered Y-cable fixes most of these cases.
 | --- | --- |
 | Adapter | USB vendor:product of the card (`0x0bda:0x8187` for an AWUS036H) |
 | MAC | the card's own hardware address, read from its EEPROM |
-| Channel | current radio channel, `unknown` until the first tune |
+| Channel | current radio channel; the app tunes to 1 when it starts |
 | RX frames | frames captured since launch |
 | TX frames | frames injected since launch |
 | Injection | the loopback socket the shell tools talk to |
@@ -35,13 +35,13 @@ changes what you receive: the log fills with that channel's beacons.
 ## Where the data goes
 
 ```
-/sdcard/liber80211/
+/sdcard/wraith/
   capture.pcap            libpcap, link type 105 (raw 802.11, no radiotap)
-  liber80211_<ms>.txt     one line per event, epoch-millisecond prefixed
+  wraith_<ms>.txt     one line per event, epoch-millisecond prefixed
 ```
 
 The text log holds decoded beacons and probe requests, GPS fixes (when
-permitted), and every injected frame. If `/sdcard/liber80211` is not writable
+permitted), and every injected frame. If `/sdcard/wraith` is not writable
 the app falls back to its own external directory; the exact path is printed in
 the log on startup.
 
@@ -51,28 +51,28 @@ Install once from a checkout:
 
 ```bash
 pkg install python ncurses-utils
-bash tools/install-liber.sh
-liber doctor
+bash tools/install-wraith.sh
+wraith doctor
 ```
 
-`liber doctor` reports the capture directory, python, and whether the app's
+`wraith doctor` reports the capture directory, python, and whether the app's
 socket answers.
 
 ### Reading captures
 
 ```bash
-liber capture ls
-liber capture info          # frame count, time window, BSSIDs, frame types
-liber capture pull          # copies pcap + recent logs to ~/liber80211-captures
-liber log                   # newest log, last 25 lines
-liber log -f                # follow it
+wraith capture ls
+wraith capture info          # frame count, time window, BSSIDs, frame types
+wraith capture pull          # copies pcap + recent logs to ~/WRAITH-captures
+wraith log                   # newest log, last 25 lines
+wraith log -f                # follow it
 ```
 
 `capture info` needs no extra tools. For deeper analysis install `tshark`:
 
 ```bash
 pkg install tshark
-tshark -r /sdcard/liber80211/capture.pcap
+tshark -r /sdcard/wraith/capture.pcap
 ```
 
 ### Injecting
@@ -81,13 +81,13 @@ The app must be running with the card attached. All commands accept the usual
 `--count` and `--delay` options.
 
 ```bash
-liber info                                  # state, channel, counters
-liber channel 6                             # retune first
-liber deauth AA:BB:CC:DD:EE:FF              # deauth every client of an AP
-liber deauth AA:BB:CC:DD:EE:FF 11:22:33:44:55:66 --count 10
-liber beacon "Free WiFi" --channel 6 --count 50
-liber raw c0000000ffffffffffffaabbccddeeffaabbccddeeff0007
-liber replay capture.pcap --count 3
+wraith info                                  # state, channel, counters
+wraith channel 6                             # retune first
+wraith deauth AA:BB:CC:DD:EE:FF              # deauth every client of an AP
+wraith deauth AA:BB:CC:DD:EE:FF 11:22:33:44:55:66 --count 10
+wraith beacon "Free WiFi" --channel 6 --count 50
+wraith raw c0000000ffffffffffffaabbccddeeffaabbccddeeff0007
+wraith replay capture.pcap --count 3
 ```
 
 `replay` understands captures written by this app (link type 105) and the usual
@@ -102,7 +102,7 @@ ignored by the target.
 
 Anything that can open a TCP socket to `127.0.0.1:8765` can inject. The
 protocol is four to six bytes of overhead per frame and is documented in
-[PROTOCOL.md](PROTOCOL.md). `tools/liber80211-inject.py` is a short, readable
+[PROTOCOL.md](PROTOCOL.md). `tools/wraith-inject.py` is a short, readable
 implementation.
 
 ## Background use

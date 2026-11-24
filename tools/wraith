@@ -1,31 +1,33 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
-# liber - one command for everything liber80211 does on the phone.
+# wraith - one command for everything the WRAITH app does on the phone.
 #
-#   liber info                 what the app is doing right now
-#   liber channel 6            retune the radio
-#   liber deauth <bssid> [sta] send a deauth
-#   liber beacon "SSID"        broadcast a beacon
-#   liber raw <hex>            send a raw 802.11 frame
-#   liber replay <file.pcap>   replay a capture
-#   liber capture ls           list captures
-#   liber capture pull [dir]   copy captures somewhere safe
-#   liber capture info         summarise capture.pcap
-#   liber log [-f]             show (or follow) the newest log
-#   liber doctor               check the install and the app
+#   wraith info                 what the app is doing right now
+#   wraith channel 6            retune the radio
+#   wraith deauth <bssid> [sta] send a deauth
+#   wraith beacon "SSID"        broadcast a beacon
+#   wraith raw <hex>            send a raw 802.11 frame
+#   wraith replay <file.pcap>   replay a capture
+#   wraith capture ls           list captures
+#   wraith capture pull [dir]   copy captures somewhere safe
+#   wraith capture info         summarise capture.pcap
+#   wraith log [-f]             show (or follow) the newest log
+#   wraith doctor               check the install and the app
 #
 # Injection commands need the app running with the adapter attached.  Capture
-# and log commands only read /sdcard/liber80211, which needs termux-setup-storage
+# and log commands only read /sdcard/wraith, which needs termux-setup-storage
 # or the storage permission granted to Termux.
+#
+# `liber` and `liber80211` remain installed as aliases so older notes still work.
 
 set -u
 
-CAPTURE_DIR="${LIBER80211_DIR:-/sdcard/liber80211}"
+CAPTURE_DIR="${WRAITH_DIR:-${LIBER80211_DIR:-/sdcard/wraith}}"
 APP_ID="com.brycestrosoft.liber80211"
 export PATH="$PATH:$HOME/bin"
 
 die() {
-    echo "liber: $*" >&2
+    echo "wraith: $*" >&2
     exit 1
 }
 
@@ -35,11 +37,12 @@ PY=$(command -v python3 || command -v python || true)
 find_client() {
     local candidate
     for candidate in \
+        "${WRAITH_CLIENT:-}" \
         "${LIBER80211_CLIENT:-}" \
-        "$PREFIX/lib/liber80211/liber80211-inject.py" \
-        "$(dirname "$(readlink -f "$0")")/liber80211-inject.py" \
-        "./tools/liber80211-inject.py" \
-        "$HOME/liber80211/liber80211-inject.py"; do
+        "$PREFIX/lib/wraith/wraith-inject.py" \
+        "$(dirname "$(readlink -f "$0")")/wraith-inject.py" \
+        "./tools/wraith-inject.py" \
+        "$HOME/wraith/wraith-inject.py"; do
         if [ -n "$candidate" ] && [ -f "$candidate" ]; then
             echo "$candidate"
             return 0
@@ -49,12 +52,12 @@ find_client() {
 }
 
 need_client() {
-    CLIENT=$(find_client) || die "cannot find liber80211-inject.py (set LIBER80211_CLIENT)"
+    CLIENT=$(find_client) || die "cannot find wraith-inject.py (set WRAITH_CLIENT)"
     [ -n "$PY" ] || die "python3 is missing, run: pkg install python"
 }
 
 newest_log() {
-    ls -t "$CAPTURE_DIR"/liber80211_*.txt 2>/dev/null | head -n 1
+    ls -t "$CAPTURE_DIR"/wraith_*.txt "$CAPTURE_DIR"/liber80211_*.txt 2>/dev/null | head -n 1
 }
 
 usage() {
@@ -68,20 +71,20 @@ case "${1:-}" in
         ;;
 
     channel)
-        [ $# -ge 2 ] || die "usage: liber channel <1-14>"
+        [ $# -ge 2 ] || die "usage: wraith channel <1-14>"
         need_client
         exec "$PY" "$CLIENT" channel "$2"
         ;;
 
     deauth)
-        [ $# -ge 2 ] || die "usage: liber deauth <bssid> [client] [--count N]"
+        [ $# -ge 2 ] || die "usage: wraith deauth <bssid> [client] [--count N]"
         need_client
         command="$1"; shift
         exec "$PY" "$CLIENT" "$command" "$@"
         ;;
 
     beacon|raw|replay)
-        [ $# -ge 2 ] || die "usage: liber $1 <argument> [options]"
+        [ $# -ge 2 ] || die "usage: wraith $1 <argument> [options]"
         need_client
         command="$1"; shift
         exec "$PY" "$CLIENT" "$command" "$@"
@@ -95,11 +98,11 @@ case "${1:-}" in
                 ls -lh "$CAPTURE_DIR"
                 ;;
             pull)
-                dest="${3:-$HOME/liber80211-captures}"
+                dest="${3:-$HOME/wraith-captures}"
                 [ -d "$CAPTURE_DIR" ] || die "no capture directory at $CAPTURE_DIR"
                 mkdir -p "$dest" || die "cannot create $dest"
                 cp -v "$CAPTURE_DIR"/capture.pcap "$dest"/ 2>/dev/null
-                for f in $(ls -t "$CAPTURE_DIR"/liber80211_*.txt 2>/dev/null | head -n 5); do
+                for f in $(ls -t "$CAPTURE_DIR"/wraith_*.txt "$CAPTURE_DIR"/liber80211_*.txt 2>/dev/null | head -n 5); do
                     cp -v "$f" "$dest"/
                 done
                 echo "copied to $dest"
@@ -152,7 +155,7 @@ for kind, count in types.most_common():
 PYSCRIPT
                 ;;
             *)
-                die "usage: liber capture [ls|pull [dir]|info]"
+                die "usage: wraith capture [ls|pull [dir]|info]"
                 ;;
         esac
         ;;
@@ -183,7 +186,7 @@ PYSCRIPT
             if printf '\003' | timeout 3 nc 127.0.0.1 8765 >/dev/null 2>&1; then
                 echo "app socket  : answering on 127.0.0.1:8765"
             else
-                echo "app socket  : not answering - start liber80211 with the adapter attached"
+                echo "app socket  : not answering - start WRAITH with the adapter attached"
             fi
         fi
         if command -v cmd >/dev/null 2>&1; then
@@ -196,7 +199,7 @@ PYSCRIPT
         ;;
 
     *)
-        echo "liber: unknown command '$1'" >&2
+        echo "wraith: unknown command '$1'" >&2
         echo >&2
         usage >&2
         exit 1

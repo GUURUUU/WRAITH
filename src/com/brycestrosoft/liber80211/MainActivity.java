@@ -125,7 +125,7 @@ public class MainActivity extends Activity {
         if (device == null) {
             set_state(R.string.state_no_adapter);
             append_message("No USB Wi-Fi adapter found.\n"
-                    + "Plug the adapter in through an OTG cable and relaunch liber80211.\n");
+                    + "Plug the adapter in through an OTG cable and relaunch WRAITH.\n");
             return;
         }
         _text_adapter.setText(describe_device(device));
@@ -236,7 +236,7 @@ public class MainActivity extends Activity {
                     append_message("Channel " + channel + " is not supported by this radio.\n");
                 }
             }
-        }, "liber80211-channel").start();
+        }, "wraith-channel").start();
     }
 
     private void start_capture() {
@@ -260,7 +260,7 @@ public class MainActivity extends Activity {
         RxThread rx = new RxThread(_conn, this, _ep_rx);
         rx.messages = _text_log;
         rx.fileMessages = _osw_log;
-        Thread thread = new Thread(rx, "liber80211-rx");
+        Thread thread = new Thread(rx, "wraith-rx");
         thread.start();
         return rx;
     }
@@ -268,7 +268,7 @@ public class MainActivity extends Activity {
     private void setup_capture_files() {
         _capture_dir = pick_capture_dir();
         try {
-            String log_name = "liber80211_" + System.currentTimeMillis() + ".txt";
+            String log_name = "wraith_" + System.currentTimeMillis() + ".txt";
             File log_path = new File(_capture_dir, log_name);
             _osw_log = new OutputStreamWriter(new FileOutputStream(log_path));
             append_message("Logging to " + log_path.getAbsolutePath() + "\n");
@@ -285,11 +285,11 @@ public class MainActivity extends Activity {
     }
 
     /*
-     * Prefers the public directory (/sdcard/liber80211) so Termux can read the
+     * Prefers the public directory (/sdcard/wraith) so Termux can read the
      * captures, falls back to the app directory and finally internal storage.
      */
     private File pick_capture_dir() {
-        File public_dir = new File(Environment.getExternalStorageDirectory(), "liber80211");
+        File public_dir = new File(Environment.getExternalStorageDirectory(), "wraith");
         try {
             if ((public_dir.isDirectory() || public_dir.mkdirs())) {
                 File probe = new File(public_dir, ".write_test");
@@ -354,7 +354,7 @@ public class MainActivity extends Activity {
 
                     if (_ep_tx != null) {
                         _inject = new InjectServer(conn, _ep_tx);
-                        new Thread(_inject, "liber80211-inject").start();
+                        new Thread(_inject, "wraith-inject").start();
                     } else {
                         append_message("No bulk OUT endpoint found, injection disabled.\n");
                     }
@@ -365,7 +365,7 @@ public class MainActivity extends Activity {
                     _driver_started = false;
                 }
             }
-        }, "liber80211-init").start();
+        }, "wraith-init").start();
     }
 
     private int rtl8187_probe(UsbDeviceConnection conn, UsbDevice device) {

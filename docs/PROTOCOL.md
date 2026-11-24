@@ -43,7 +43,7 @@ Rules the app enforces and the caller should respect:
 ## Reading the status
 
 `INFO` returns the same text the app shows on screen, so a written tool behaves
-like `liber info`:
+like `wraith info`:
 
 ```
 state: capturing

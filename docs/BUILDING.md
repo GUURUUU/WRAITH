@@ -1,4 +1,4 @@
-# Building liber80211
+# Building WRAITH
 
 The project has no Gradle build and no third-party dependencies: it is compiled
 with the Android SDK build tools directly. That keeps the build reproducible on
@@ -42,7 +42,7 @@ jar uf build/app.apk -C build classes.dex
 "$BT/zipalign" -f -p 4 build/app.apk build/aligned.apk
 "$BT/apksigner" sign --ks build/debug.keystore --ks-key-alias androiddebugkey \
     --ks-pass pass:android --key-pass pass:android \
-    --out liber80211.apk build/aligned.apk
+    --out wraith.apk build/aligned.apk
 ```
 
 On Windows with Git Bash, call the `.bat` wrappers (`d8.bat`, `apksigner.bat`)
@@ -59,7 +59,7 @@ keytool -genkeypair -v -keystore build/debug.keystore -storetype PKCS12 \
 ## Install and run
 
 ```bash
-adb install -r liber80211.apk
+adb install -r wraith.apk
 adb shell am start -n com.brycestrosoft.liber80211/.MainActivity
 ```
 
@@ -73,8 +73,8 @@ adb shell pm grant com.brycestrosoft.liber80211 android.permission.WRITE_EXTERNA
 ## Checking it works
 
 ```bash
-adb shell "ls -l /sdcard/liber80211"
-adb pull /sdcard/liber80211/capture.pcap
+adb shell "ls -l /sdcard/wraith"
+adb pull /sdcard/wraith/capture.pcap
 tshark -r capture.pcap -Y "wlan.fc.type_subtype == 8"
 ```
 
@@ -87,7 +87,7 @@ adb shell "printf '\005' | nc 127.0.0.1 8765"     # INFO
 ## Continuous integration
 
 `.github/workflows/build-apk.yml` runs the same steps on a runner and uploads
-`liber80211.apk` as a build artifact. It needs `platforms/android-35` and
+`wraith.apk` as a build artifact. It needs `platforms/android-35` and
 build-tools 35.0.0 to match the local build; if it drifts, the local recipe
 above is the reference.
 

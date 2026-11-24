@@ -1,8 +1,10 @@
 <resources>
-    <color name="background">#0E1116</color>
-    <color name="card">#171B22</color>
-    <color name="text_primary">#E8EAED</color>
-    <color name="text_secondary">#8A93A0</color>
-    <color name="text_log">#B9C2CF</color>
-    <color name="accent">#6FD3A0</color>
+    <color name="background">#08090B</color>
+    <color name="card">#141619</color>
+    <color name="card_edge">#26292E</color>
+    <color name="text_primary">#EDE7DA</color>
+    <color name="text_secondary">#8B8F96</color>
+    <color name="text_log">#B6BBC2</color>
+    <color name="accent">#E3B75B</color>
+    <color name="accent_dim">#8A6F35</color>
 </resources>

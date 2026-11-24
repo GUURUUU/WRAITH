@@ -1,19 +1,19 @@
 #!/data/data/com.termux/files/usr/bin/python3
-"""Send 802.11 frames through liber80211 on Android.
+"""Send 802.11 frames through WRAITH on Android.
 
-The ALFA AWUS036H is driven in user space by the liber80211 app, so it never
+The ALFA AWUS036H is driven in user space by the WRAITH app, so it never
 appears as a network interface and tools like aireplay-ng cannot open it with
 libpcap.  The app instead listens on 127.0.0.1:8765 and this script speaks its
 protocol, so injection can be driven from a Termux prompt.
 
 Usage:
-  liber80211-inject.py channel 6
-  liber80211-inject.py status
-  liber80211-inject.py deauth AA:BB:CC:DD:EE:FF              # broadcast client
-  liber80211-inject.py deauth AA:BB:CC:DD:EE:FF 11:22:33:44:55:66
-  liber80211-inject.py beacon "Free WiFi"
-  liber80211-inject.py raw c0000000ffffffffffffaabbccddeeffaabbccddeeff0007
-  liber80211-inject.py replay capture.pcap --count 5
+  wraith-inject.py channel 6
+  wraith-inject.py status
+  wraith-inject.py deauth AA:BB:CC:DD:EE:FF              # broadcast client
+  wraith-inject.py deauth AA:BB:CC:DD:EE:FF 11:22:33:44:55:66
+  wraith-inject.py beacon "Free WiFi"
+  wraith-inject.py raw c0000000ffffffffffffaabbccddeeffaabbccddeeff0007
+  wraith-inject.py replay capture.pcap --count 5
 """
 
 import argparse
