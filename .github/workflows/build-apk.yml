@@ -1,8 +1,9 @@
-name: Build liber80211 APK
+name: Build WRAITH APK
 
 on:
   push:
     branches: [ main ]
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -17,82 +18,68 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Android build tools + platform-tools
-        run: |
-          mkdir -p $HOME/android-sdk
-          cd $HOME/android-sdk
-          wget -q https://dl.google.com/android/repository/build-tools_r33.0.2-linux.zip -O bt.zip
-          unzip -q bt.zip
-          wget -q https://dl.google.com/android/repository/platform-tools-latest-linux.zip -O pt.zip
-          unzip -q pt.zip
-          BT=$(dirname $(find $HOME/android-sdk -name aapt -type f | head -1))
-          echo "BT=$BT" >> $GITHUB_ENV
-          echo "PT=$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
-          echo "BT found: $BT"
-          ls -la $BT/d8 $BT/dx 2>/dev/null || true
+      # Same tools as the documented local build (docs/BUILDING.md).
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Get android.jar (try platform zip, fall back to Maven)
+      - name: Install build tools and platform
         run: |
-          wget -q https://dl.google.com/android/repository/android-23_r02.zip -O /tmp/platform.zip || true
-          if [ -s /tmp/platform.zip ]; then
-            (cd $HOME/android-sdk && unzip -o -q /tmp/platform.zip) || true
-          fi
-          ANDROID_JAR=$(find $HOME/android-sdk -name "android.jar" | head -1)
-          if [ -z "$ANDROID_JAR" ]; then
-            echo "no android.jar in SDK, downloading API 16 jar from Maven"
-            wget -q https://repo1.maven.org/maven2/com/google/android/android/4.1.1.4/android-4.1.1.4.jar -O /tmp/android.jar
-            ANDROID_JAR=/tmp/android.jar
-          fi
-          echo "ANDROID_JAR=$ANDROID_JAR" >> $GITHUB_ENV
-          echo "using: $ANDROID_JAR"
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" > /dev/null
+          BT="$ANDROID_HOME/build-tools/35.0.0"
+          JAR="$ANDROID_HOME/platforms/android-35/android.jar"
+          test -x "$BT/aapt" && test -f "$JAR"
+          echo "BT=$BT" >> "$GITHUB_ENV"
+          echo "JAR=$JAR" >> "$GITHUB_ENV"
 
-      - name: Compile resources and package base APK (aapt v1)
+      - name: Compile resources and package the base APK
         run: |
-          mkdir -p out/gen
-          $BT/aapt package -f \
+          rm -rf out
+          mkdir -p out/gen out/classes
+          "$BT/aapt" package -f \
             -M AndroidManifest.xml \
             -S res \
-            -I $ANDROID_JAR \
+            -I "$JAR" \
             -J out/gen \
-            -F base.apk
+            -F out/base.apk
           mkdir -p out/gen/com/brycestrosoft/liber80211
-          [ -f out/gen/R.java ] && mv out/gen/R.java out/gen/com/brycestrosoft/liber80211/R.java || true
-          ls -la base.apk
-          find out/gen -name R.java
+          if [ -f out/gen/R.java ]; then
+            mv out/gen/R.java out/gen/com/brycestrosoft/liber80211/R.java
+          fi
 
       - name: Compile Java sources
         run: |
-          mkdir -p out/classes
-          javac -source 8 -target 8 -cp "out/gen:$ANDROID_JAR" -d out/classes src/com/brycestrosoft/liber80211/*.java
+          javac --release 11 -nowarn \
+            -cp "out/gen:$JAR" \
+            -d out/classes \
+            src/com/brycestrosoft/liber80211/*.java
 
-      - name: Convert to Dalvik bytecode (d8 via jar)
+      - name: Convert to Dalvik bytecode
         run: |
-          jar cf classes.jar -C out/classes .
-          ls -la classes.jar
-          $BT/d8 classes.jar
-          ls -la *.dex
+          (cd out && jar cf classes.jar -C classes .)
+          "$BT/d8" --min-api 23 --lib "$JAR" --output out out/classes.jar
+          ls -la out/classes.dex
 
-      - name: Add classes.dex to base APK
+      - name: Assemble, align and sign
         run: |
-          zip -q base.apk classes.dex
-
-      - name: Align APK
-        run: |
-          $BT/zipalign -p 4 base.apk app-aligned.apk
-
-      - name: Create debug keystore and sign APK
-        run: |
-          keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
-          $BT/apksigner sign --ks debug.keystore --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android --out liber80211.apk app-aligned.apk
+          cp out/base.apk out/app.apk
+          (cd out && jar uf app.apk classes.dex)
+          "$BT/zipalign" -f -p 4 out/app.apk out/aligned.apk
+          keytool -genkeypair -v -keystore out/debug.keystore -storetype PKCS12 \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+          "$BT/apksigner" sign --ks out/debug.keystore --ks-key-alias androiddebugkey \
+            --ks-pass pass:android --key-pass pass:android \
+            --out wraith.apk out/aligned.apk
 
       - name: Verify APK
         run: |
-          $BT/apksigner verify --print-certs liber80211.apk | head -5
-          unzip -l liber80211.apk | head -15
+          "$BT/apksigner" verify --print-certs wraith.apk | head -5
+          unzip -l wraith.apk | head -15
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: liber80211-apk
-          path: liber80211.apk
+          name: wraith-apk
+          path: wraith.apk
           retention-days: 30
