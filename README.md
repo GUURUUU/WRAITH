@@ -1,5 +1,7 @@
 # WRAITH
 
+[![Build WRAITH APK](https://github.com/GUURUUU/WRAITH/actions/workflows/build-apk.yml/badge.svg)](https://github.com/GUURUUU/WRAITH/actions/workflows/build-apk.yml)
+
 **802.11 monitor mode, frame capture and packet injection on an unrooted Android
 phone, using an external USB Wi-Fi card.**
 
@@ -124,5 +126,5 @@ docs/                    usage, protocol, building, screenshots
 
 ## License
 
-GPL v2, inherited from the Linux driver this port is based on. See
-`COPYING`/the file headers.
+GPL v2, inherited from the Linux driver this port is based on. The full text is
+in [COPYING](COPYING) and in the headers of the source files.
