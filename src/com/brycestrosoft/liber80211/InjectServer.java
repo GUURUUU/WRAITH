@@ -38,6 +38,8 @@ import android.hardware.usb.UsbEndpoint;
  *              -> 0
  *   4  STATUS  no payload
  *              -> u32 big-endian frames transmitted, u8 current channel
+ *   5  INFO    no payload
+ *              -> u16 big-endian length, then a UTF-8 status summary
  */
 public class InjectServer implements Runnable {
     public static final int PORT = 8765;
@@ -46,7 +48,6 @@ public class InjectServer implements Runnable {
     private final UsbEndpoint _out;
     private ServerSocket _server;
     private volatile boolean _stop = false;
-    private volatile long _frames_sent = 0;
 
     public InjectServer(UsbDeviceConnection conn, UsbEndpoint out) {
         _conn = conn;
@@ -55,7 +56,8 @@ public class InjectServer implements Runnable {
 
     public void run() {
         try {
-            _server = new ServerSocket(PORT, 4, InetAddress.getByName("127.0.0.1"));
+            _server = new ServerSocket(PORT, 16, InetAddress.getByName("127.0.0.1"));
+            Stats.injection_ready = true;
             USBIO.log("Injection socket listening on 127.0.0.1:" + PORT + "\n");
             while (!_stop) {
                 Socket socket = _server.accept();
@@ -70,6 +72,7 @@ public class InjectServer implements Runnable {
 
     public void stop() {
         _stop = true;
+        Stats.injection_ready = false;
         try {
             if (_server != null) {
                 _server.close();
@@ -100,19 +103,20 @@ public class InjectServer implements Runnable {
                         in.readFully(frame);
                         int sent = USBIO.rtl8187_tx(_conn, _out, frame, USBIO.RATE_1M);
                         out.write(sent == 12 + length ? 0 : 1);
-                        if (sent == 12 + length) {
-                            _frames_sent++;
-                        }
                     } else if (command == 2) {
                         int channel = in.readUnsignedByte();
                         out.write(USBIO.rtl8187_set_channel(_conn, channel) ? 0 : 1);
                     } else if (command == 3) {
                         out.write(0);
                     } else if (command == 4) {
-                        long sent = _frames_sent;
+                        long sent = Stats.TX_FRAMES.get();
                         out.write(new byte[] { (byte) (sent >> 24), (byte) (sent >> 16),
                                 (byte) (sent >> 8), (byte) sent,
-                                (byte) USBIO.current_channel });
+                                (byte) Stats.CHANNEL.get() });
+                    } else if (command == 5) {
+                        byte[] text = Stats.summary().getBytes("UTF-8");
+                        out.write(new byte[] { (byte) (text.length >> 8), (byte) text.length });
+                        out.write(text);
                     } else {
                         out.write(2);
                         break;

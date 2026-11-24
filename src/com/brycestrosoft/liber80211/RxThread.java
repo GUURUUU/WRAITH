@@ -16,8 +16,10 @@ import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.UnsupportedEncodingException;
 import java.nio.ByteBuffer;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -36,8 +38,9 @@ public class RxThread implements Runnable {
 	private UsbEndpoint _ep;
 	public boolean stop_thread = false;
 	public TextView messages;
-	public OutputStreamWriter fileMessages;
-	private Set<String> _seen_macs;
+	public OutputStreamWriter fileMessages;    // Shown in the on-screen log; the file keeps epoch milliseconds for ordering.
+    private final SimpleDateFormat _clock = new SimpleDateFormat("HH:mm:ss");
+    private Set<String> _seen_macs;
 	private Set<String> _seen_essids;
 
 	private static final int BUFFER_SIZE = 2500;
@@ -64,14 +67,16 @@ public class RxThread implements Runnable {
 
 				byte[] data = Arrays.copyOf(buffer, length);
 				PcapWriter.write(data, length);
+				Stats.RX_FRAMES.incrementAndGet();
 
 				if (extract_frame_control(data).equals("8000")) {
+					Stats.BEACONS.incrementAndGet();
 					boolean show_log_on_screen = true;
 					String beacon_bssid = extractBssid(data);
-					String beacon_essid = extractEssid(data);
-					write_message(String.format("BEACON\t%s\t%s.\n", beacon_bssid, beacon_essid), _parent_activity, show_log_on_screen);
+					String beacon_essid = extractEssid(data);                    write_message(String.format("BEACON %s %s\n", beacon_bssid, beacon_essid), _parent_activity, show_log_on_screen);
 				}
 				else if (extract_frame_control(data).equals("4000")) {
+					Stats.PROBE_REQUESTS.incrementAndGet();
 					String probe_request_sender_MAC = extract_probe_request_sender_MAC(data);
 					String probe_request_essid = extract_probe_request_essid(data);
 					boolean show_log_on_screen = true;
@@ -84,12 +89,12 @@ public class RxThread implements Runnable {
 					else if (!_seen_essids.contains(probeEssid)) {
 						showLogOnScreen = true;
 						_seen_essids.add(probeEssid);
-					}*/
-					write_message(String.format("PROBE REQUEST\t%s\t%s.\n", probe_request_sender_MAC, probe_request_essid),
+					}*/                    write_message(String.format("PROBE %s %s\n", probe_request_sender_MAC, probe_request_essid),
 							_parent_activity, show_log_on_screen);
 				}
 			}
-			write_message("About to exit run()\n", _parent_activity);
+			Stats.receiving = false;
+			write_message("Capture stopped.\n", _parent_activity);
 		}
 		catch (Exception e) {
 			write_message(e.getClass().toString() + "\n" + e.getMessage() + "\n" + e.getLocalizedMessage() + 
@@ -152,10 +157,9 @@ public class RxThread implements Runnable {
 	
 	// Write to the messages textview
 	private void write_message(final String message, Activity parent_activity, boolean show_log_on_screen) {
-		if (show_log_on_screen) {
-			parent_activity.runOnUiThread(new Runnable() {
+		if (show_log_on_screen) {            parent_activity.runOnUiThread(new Runnable() {
 				public void run() {
-					messages.append(System.currentTimeMillis() + "\t" + message);
+					messages.append(_clock.format(new Date()) + "  " + message);
 				}
 			});
 		}

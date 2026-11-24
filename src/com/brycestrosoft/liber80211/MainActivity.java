@@ -1,10 +1,10 @@
 /**
  * Copyright 2012 Bryce Thomas <bryce.m.thomas@gmail.com>
- * 
+ *
  * Based on the Linux RTL8187 driver, which is:
  * Copyright 2007 Michael Wu <flamingice@sourmilk.net>
  * Copyright 2007 Andrea Merello <andreamrl@tiscali.it>
- * 
+ *
  * liber80211 is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
@@ -17,10 +17,7 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
-import java.util.Arrays;
 import java.util.Map;
-
-import com.brycestrosoft.liber80211.R;
 
 import android.Manifest;
 import android.app.Activity;
@@ -42,130 +39,259 @@ import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.text.method.ScrollingMovementMethod;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.View;
+import android.widget.Button;
+import android.widget.SeekBar;
 import android.widget.TextView;
 
 /*
- * The primary Android activity that you seen when the app launches.
+ * The single screen of the app: adapter state, live counters, capture control,
+ * channel selection and the frame log.
+ *
+ * The USB work happens on background threads: probing the adapter bit-bangs its
+ * EEPROM over thousands of control transfers, which would ANR the UI thread.
  */
 public class MainActivity extends Activity {
 
     private static final String ACTION_USB_PERMISSION = "com.brycestrosoft.liber80211.USB_PERMISSION";
     private static final int REQUEST_PERMISSIONS = 1;
-    private File _capture_dir;
+    private static final long STATUS_INTERVAL_MS = 1000;
 
-    private volatile RxThread _rx;
-    private volatile InjectServer _inject;
+    // USB state
+    private UsbManager _usb_manager;
     private volatile UsbDeviceConnection _conn;
     private volatile UsbInterface _intf_0;
-    private TextView _txt_general_info;
-    private TextView _txt_rx;
+    private UsbEndpoint _ep_rx;
+    private UsbEndpoint _ep_tx;
+    private volatile boolean _driver_started = false;
+
+    // Capture state
+    private volatile RxThread _rx;
+    private volatile InjectServer _inject;
+    private File _capture_dir;
     private OutputStreamWriter _osw_log;
+    private long _last_rx_count = 0;
+
+    // Views
+    private TextView _text_state;
+    private TextView _text_adapter;
+    private TextView _text_mac;
+    private TextView _text_channel;
+    private TextView _text_rx_frames;
+    private TextView _text_tx_frames;
+    private TextView _text_socket;
+    private TextView _text_channel_hint;
+    private TextView _text_log;
+    private Button _button_capture;
+    private SeekBar _seek_channel;
+
     private BroadcastReceiver _usb_detached_receiver;
     private BroadcastReceiver _usb_permission_receiver;
-    private UsbManager _usb_manager;
-    private volatile boolean _driver_started = false;
     private LocationManager _loc_manager;
     private LocationListener _loc_listener;
+
+    private final Handler _ui = new Handler(Looper.getMainLooper());
+    private final Runnable _status_tick = new Runnable() {
+        public void run() {
+            update_status();
+            _ui.postDelayed(this, STATUS_INTERVAL_MS);
+        }
+    };
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
-        // the textview that displays info about what was heard over the air.
-        _txt_rx = (TextView) findViewById(R.id.textView2);
-        _txt_rx.setMovementMethod(new ScrollingMovementMethod());
-        _txt_general_info = (TextView) findViewById(R.id.textViewBla);
+        bind_views();
 
         _usb_manager = (UsbManager) getSystemService(Context.USB_SERVICE);
 
-        // setup a receiver to be notified when the Wi-Fi card is removed.
         _usb_detached_receiver = finish_on_usb_detached();
         registerReceiver(_usb_detached_receiver, new IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED));
-
-        // setup a receiver for the response to our USB permission request.
         _usb_permission_receiver = usb_permission_receiver();
         registerReceiver(_usb_permission_receiver, new IntentFilter(ACTION_USB_PERMISSION));
 
-        setup_log_file();
-
-        // give USBIO an output stream and textview it can use for logging.
+        setup_capture_files();
         USBIO.set_log_file(_osw_log);
-        USBIO.set_text_view(_txt_rx);
+        USBIO.set_text_view(_text_log);
 
         request_runtime_permissions();
 
-        // When launched from the USB_DEVICE_ATTACHED intent we're handed the device.
-        // When launched from the launcher we have to find it ourselves.
-        Intent intent = getIntent();
-        UsbDevice device = null;
-        if (intent != null) {
-            device = (UsbDevice) intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
-        }
+        UsbDevice device = adapter_from_intent_or_bus();
         if (device == null) {
-            device = find_attached_adapter();
-        }
-
-        if (device == null) {
-            append_message("No USB Wi-Fi adapter found.\nPlug in the adapter via OTG and relaunch liber80211.\n");
-            _txt_general_info.append("No supported USB device attached.\n");
+            set_state(R.string.state_no_adapter);
+            append_message("No USB Wi-Fi adapter found.\n"
+                    + "Plug the adapter in through an OTG cable and relaunch liber80211.\n");
             return;
         }
+        _text_adapter.setText(describe_device(device));
 
-        _txt_general_info.append("Vendor ID: " + device.getVendorId() + "\n");
-        _txt_general_info.append("Product ID: " + device.getProductId() + "\n");
-
-        if (!_usb_manager.hasPermission(device)) {
-            append_message("Waiting for USB permission...\n");
-            PendingIntent pi;
-            if (Build.VERSION.SDK_INT >= 31) {
-                pi = PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION),
-                        PendingIntent.FLAG_MUTABLE);
-            } else {
-                pi = PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION), 0);
-            }
-            _usb_manager.requestPermission(device, pi);
-        } else {
+        if (_usb_manager.hasPermission(device)) {
             start_driver(device);
+        } else {
+            set_state(R.string.state_permission);
+            _usb_manager.requestPermission(device, permission_pending_intent());
         }
+
+        _ui.post(_status_tick);
+    }
+
+    private void bind_views() {
+        _text_state = (TextView) findViewById(R.id.text_state);
+        _text_adapter = (TextView) findViewById(R.id.text_adapter);
+        _text_mac = (TextView) findViewById(R.id.text_mac);
+        _text_channel = (TextView) findViewById(R.id.text_channel);
+        _text_rx_frames = (TextView) findViewById(R.id.text_rx_frames);
+        _text_tx_frames = (TextView) findViewById(R.id.text_tx_frames);
+        _text_socket = (TextView) findViewById(R.id.text_socket);
+        _text_channel_hint = (TextView) findViewById(R.id.text_channel_hint);
+        _text_log = (TextView) findViewById(R.id.text_log);
+        _button_capture = (Button) findViewById(R.id.button_capture);
+        _seek_channel = (SeekBar) findViewById(R.id.seek_channel);
+
+        _button_capture.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (Stats.receiving) {
+                    stop_capture();
+                } else {
+                    start_capture();
+                }
+            }
+        });
+        findViewById(R.id.button_clear).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                _text_log.setText("");
+            }
+        });
+
+        _seek_channel.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar bar, int progress, boolean from_user) {
+                if (from_user) {
+                    _text_channel_hint.setText("Channel: " + (progress + 1) + " (1-14)");
+                }
+            }
+
+            public void onStartTrackingTouch(SeekBar bar) {
+            }
+
+            public void onStopTrackingTouch(SeekBar bar) {
+                set_channel(bar.getProgress() + 1);
+            }
+        });
     }
 
     /*
-     * Picks the RTL8187 device out of the USB bus. Falls back to whatever single
-     * device is attached so that unknown vendor/product ids are reported rather
-     * than silently ignored.
+     * Live panel: counters come from Stats so they match what the injection
+     * socket reports to the shell tools.
      */
-    private UsbDevice find_attached_adapter() {
-        Map<String, UsbDevice> devices = _usb_manager.getDeviceList();
-        UsbDevice fallback = null;
-        for (UsbDevice device : devices.values()) {
-            int vendor = device.getVendorId();
-            int product = device.getProductId();
-            if (vendor == 3034 && product == 33159) { // 0x0bda:0x8187 RTL8187
-                return device;
-            }
-            if (vendor == 0x050d && product == 0x705e) { // RTL8187B
-                return device;
-            }
-            if (fallback == null) {
-                fallback = device;
+    private void update_status() {
+        if (Stats.receiving) {
+            long now = Stats.RX_FRAMES.get();
+            long rate = now - _last_rx_count;
+            _last_rx_count = now;
+            set_state_text(getString(R.string.state_capturing) + " - " + rate + " frames/s");
+            _button_capture.setText(R.string.action_stop_capture);
+            _button_capture.setEnabled(true);
+        } else if (_conn != null && _driver_started) {
+            set_state(R.string.state_stopped);
+            _button_capture.setText(R.string.action_start_capture);
+            _button_capture.setEnabled(_ep_rx != null);
+        }
+
+        int channel = Stats.CHANNEL.get();
+        _text_channel.setText(channel == 0 ? getString(R.string.value_unknown)
+                : String.valueOf(channel));
+        if (channel > 0) {
+            _seek_channel.setProgress(channel - 1);
+            _text_channel_hint.setText("Channel: " + channel + " (1-14)");
+        }
+        _text_rx_frames.setText(String.valueOf(Stats.RX_FRAMES.get()));
+        _text_tx_frames.setText(String.valueOf(Stats.TX_FRAMES.get()));
+        _text_socket.setText(Stats.injection_ready
+                ? "127.0.0.1:" + InjectServer.PORT : getString(R.string.value_closed));
+
+        if (DeviceProperties.mac != null) {
+            String mac = format_mac(DeviceProperties.mac);
+            if (!mac.equals(_text_mac.getText().toString())) {
+                _text_mac.setText(mac);
             }
         }
-        return fallback;
     }
 
     /*
-     * Prefers a public directory (/sdcard/liber80211) so the capture can be read by
-     * Termux and other apps. Falls back to the app-specific external directory, then
-     * to internal storage if the storage permission was not granted.
+     * Retuning touches the radio over USB, so it cannot run on the UI thread.
+     */
+    private void set_channel(final int channel) {
+        if (_conn == null) {
+            append_message("Set a channel once the adapter is ready.\n");
+            return;
+        }
+        new Thread(new Runnable() {
+            public void run() {
+                if (!USBIO.rtl8187_set_channel(_conn, channel)) {
+                    append_message("Channel " + channel + " is not supported by this radio.\n");
+                }
+            }
+        }, "liber80211-channel").start();
+    }
+
+    private void start_capture() {
+        if (_rx != null || _conn == null) {
+            return;
+        }
+        _rx = spawn_rx_thread();
+        Stats.receiving = true;
+        append_message("Capture started.\n");
+    }
+
+    private void stop_capture() {
+        if (_rx != null) {
+            _rx.stopThread();
+            _rx = null;
+        }
+        Stats.receiving = false;
+    }
+
+    private RxThread spawn_rx_thread() {
+        RxThread rx = new RxThread(_conn, this, _ep_rx);
+        rx.messages = _text_log;
+        rx.fileMessages = _osw_log;
+        Thread thread = new Thread(rx, "liber80211-rx");
+        thread.start();
+        return rx;
+    }
+
+    private void setup_capture_files() {
+        _capture_dir = pick_capture_dir();
+        try {
+            String log_name = "liber80211_" + System.currentTimeMillis() + ".txt";
+            File log_path = new File(_capture_dir, log_name);
+            _osw_log = new OutputStreamWriter(new FileOutputStream(log_path));
+            append_message("Logging to " + log_path.getAbsolutePath() + "\n");
+        } catch (FileNotFoundException e) {
+            append_message("Could not open the log file: " + e.getMessage() + "\n");
+            _osw_log = null;
+        }
+        File pcap = new File(_capture_dir, "capture.pcap");
+        if (PcapWriter.open(pcap)) {
+            append_message("Frames written to " + pcap.getAbsolutePath() + "\n");
+        } else {
+            append_message("Could not open the pcap capture file.\n");
+        }
+    }
+
+    /*
+     * Prefers the public directory (/sdcard/liber80211) so Termux can read the
+     * captures, falls back to the app directory and finally internal storage.
      */
     private File pick_capture_dir() {
         File public_dir = new File(Environment.getExternalStorageDirectory(), "liber80211");
         try {
-            if (public_dir.isDirectory() || public_dir.mkdirs()) {
+            if ((public_dir.isDirectory() || public_dir.mkdirs())) {
                 File probe = new File(public_dir, ".write_test");
                 if (probe.createNewFile() || probe.exists()) {
                     probe.delete();
@@ -173,45 +299,22 @@ public class MainActivity extends Activity {
                 }
             }
         } catch (Exception e) {
-            // fall through
+            // fall through to the app-specific directory
         }
         File app_dir = getExternalFilesDir(null);
-        if (app_dir != null) {
-            return app_dir;
-        }
-        return getFilesDir();
-    }
-
-    private void setup_log_file() {
-        _capture_dir = pick_capture_dir();
-        try {
-            String log_file_name = "liber80211_" + String.valueOf(System.currentTimeMillis()) + ".txt";
-            File log_file_path = new File(_capture_dir, log_file_name);
-            FileOutputStream log_file = new FileOutputStream(log_file_path);
-            _osw_log = new OutputStreamWriter(log_file);
-            _txt_general_info.append("Logging to: " + log_file_path.getAbsolutePath() + "\n");
-        } catch (FileNotFoundException e) {
-            _txt_general_info.append("Could not open log file: " + e.getMessage() + "\n");
-            _osw_log = null;
-        }
-        File pcap = new File(_capture_dir, "capture.pcap");
-        if (PcapWriter.open(pcap)) {
-            _txt_general_info.append("Frames written to: " + pcap.getAbsolutePath() + "\n");
-        } else {
-            _txt_general_info.append("Could not open pcap capture file.\n");
-        }
+        return app_dir != null ? app_dir : getFilesDir();
     }
 
     /*
-     * Opens the device and replays rtl8187_probe()/rtl8187_start() on a worker thread.
-     * The probe bit-bangs the EEPROM over control transfers and takes several
-     * seconds, which is far too long for the UI thread on modern Android.
+     * Opens the adapter and replays rtl8187_probe()/rtl8187_start() on a worker
+     * thread, then publishes the injection socket.
      */
     private void start_driver(final UsbDevice device) {
         if (_driver_started) {
             return;
         }
         _driver_started = true;
+        set_state(R.string.state_initialising);
         append_message("Adapter found, initialising driver...\n");
 
         new Thread(new Runnable() {
@@ -226,65 +329,64 @@ public class MainActivity extends Activity {
                     _conn = conn;
 
                     UsbInterface intf = device.getInterface(0);
-                    if (!conn.claimInterface(intf, false)) {
-                        // Force-claim detaches any kernel driver that got bound to the interface.
-                        append_message("claimInterface() failed, retrying with force...\n");
-                        if (!conn.claimInterface(intf, true)) {
-                            append_message("claimInterface(force) also failed.\n");
-                        } else {
-                            append_message("claimInterface(force) succeeded.\n");
-                        }
+                    if (!conn.claimInterface(intf, false) && !conn.claimInterface(intf, true)) {
+                        append_message("claimInterface() failed, continuing anyway.\n");
                     }
                     _intf_0 = intf;
 
-                    UsbEndpoint ep = pick_rx_endpoint(intf);
-                    append_message("RX endpoint: address=0x" + Integer.toHexString(ep.getAddress())
-                            + " type=" + ep.getType() + " maxPacket=" + ep.getMaxPacketSize() + "\n");
+                    _ep_rx = pick_rx_endpoint(intf);
+                    _ep_tx = pick_tx_endpoint(intf);
+                    append_message("RX endpoint 0x" + Integer.toHexString(_ep_rx.getAddress())
+                            + ", TX endpoint " + (_ep_tx == null ? "none"
+                                    : "0x" + Integer.toHexString(_ep_tx.getAddress())) + "\n");
 
                     USBIO.do_log = true;
-                    /*** THIS IS WHERE WE GET DOWN TO BUSINESS ON THE WIRE. ***/
-                    // rtl8187_probe() here is meant to behave (on the wire) like rtl8187_probe() in the Linux driver.
                     rtl8187_probe(conn, device);
-                    // rtl8187_rfkill_poll() here is meant to behave (on the wire) like rtl8187_rfkill_poll() in the Linux driver.
-                    USBIO.rtl8187_rfkill_poll(conn); // seems to be first "_ops" function called after probe phase.
-                    USBIO.do_log = true;
-                    // rtl8187_start() here is meant to behave (on the wire) like rtl8187_start() in the Linux driver.
-                    _rx = USBIO.rtl8187_start(conn, ep, MainActivity.this);
-                    USBIO.do_log = true;
-                    // rtl8187_add_interface() here is meant to behave (on the wire) like rtl8187_add_interface() in the Linux driver.
+                    USBIO.rtl8187_rfkill_poll(conn);
+                    _rx = USBIO.rtl8187_start(conn, _ep_rx, MainActivity.this);
+                    _rx.messages = _text_log;
+                    _rx.fileMessages = _osw_log;
                     USBIO.rtl8187_add_interface(conn, DeviceProperties.mac);
+                    // The RF init leaves the synthesiser at its reset value; tune to a
+                    // known channel so the UI and the tools agree on where we are.
+                    USBIO.rtl8187_set_channel(conn, 1);
+                    Stats.receiving = true;
 
-                    show_device_info(device);
-
-                    // The adapter isn't a network interface, so hand the transmit path
-                    // to anything running on the phone over a loopback socket.
-                    UsbEndpoint out = pick_tx_endpoint(intf);
-                    if (out != null) {
-                        _inject = new InjectServer(conn, out);
+                    if (_ep_tx != null) {
+                        _inject = new InjectServer(conn, _ep_tx);
                         new Thread(_inject, "liber80211-inject").start();
-                        append_message("TX endpoint: address=0x" + Integer.toHexString(out.getAddress())
-                                + " - injection on 127.0.0.1:" + InjectServer.PORT + "\n");
                     } else {
                         append_message("No bulk OUT endpoint found, injection disabled.\n");
                     }
 
-                    append_message("Monitor mode started. Listening for frames...\n");
+                    append_message("Monitor mode running. Frames to " + _capture_dir + "\n");
                 } catch (Exception e) {
                     append_message(describe(e));
+                    _driver_started = false;
                 }
             }
         }, "liber80211-init").start();
     }
 
-    private static UsbEndpoint pick_tx_endpoint(UsbInterface intf) {
-        for (int i = 0; i < intf.getEndpointCount(); i++) {
-            UsbEndpoint ep = intf.getEndpoint(i);
-            if (ep.getType() == UsbConstants.USB_ENDPOINT_XFER_BULK
-                    && ep.getDirection() == UsbConstants.USB_DIR_OUT) {
-                return ep;
-            }
-        }
-        return null;
+    private int rtl8187_probe(UsbDeviceConnection conn, UsbDevice device) {
+        // Each of these primes a cached value in DeviceProperties that later
+        // steps depend on, and each mirrors a step of rtl8187_probe().
+        USBIO.get_eeprom_width(conn);
+        USBIO.perform_probe_black_magic_write_one(conn);
+        USBIO.get_mac_address(conn);
+        USBIO.setup_channels_part_one(conn);
+        byte mystery_reg = USBIO.perform_probe_black_magic_read_write_one(conn);
+        USBIO.get_asic_revision(conn);
+        USBIO.perform_probe_black_magic_write_write_one(conn, mystery_reg);
+        USBIO.get_hardware_revision(conn, device);
+        USBIO.setup_channels_part_two(conn);
+        // rtl8187_detect_rf() on the wire; the returned ops object is not used
+        // yet because this port only supports the rtl8225z2 radios.
+        USBIO.rtl8187_detect_rf(conn, device);
+        USBIO.do_log = true;
+        USBIO.config_rtl_8187_leds(conn);
+        USBIO.rtl8187_rfkill_init(conn);
+        return 0;
     }
 
     private static UsbEndpoint pick_rx_endpoint(UsbInterface intf) {
@@ -298,83 +400,104 @@ public class MainActivity extends Activity {
         return intf.getEndpoint(0);
     }
 
-    private void show_device_info(final UsbDevice device) {
-        final String info = "eeprom width is " + DeviceProperties.eeprom_width + "\n"
-                + String.format("MAC is %02X:%02X:%02X:%02X:%02X:%02X\n", DeviceProperties.mac[0],
-                        DeviceProperties.mac[1], DeviceProperties.mac[2], DeviceProperties.mac[3],
-                        DeviceProperties.mac[4], DeviceProperties.mac[5])
-                + "Interface count: " + device.getInterfaceCount() + "\n"
-                + "Interface 1 endpoint count: " + device.getInterface(0).getEndpointCount() + "\n";
-        runOnUiThread(new Runnable() {
-            public void run() {
-                _txt_general_info.append(info);
+    private static UsbEndpoint pick_tx_endpoint(UsbInterface intf) {
+        for (int i = 0; i < intf.getEndpointCount(); i++) {
+            UsbEndpoint ep = intf.getEndpoint(i);
+            if (ep.getType() == UsbConstants.USB_ENDPOINT_XFER_BULK
+                    && ep.getDirection() == UsbConstants.USB_DIR_OUT) {
+                return ep;
             }
-        });
+        }
+        return null;
+    }
+
+    /*
+     * Picks the RTL8187 out of the USB bus, falling back to whatever single
+     * device is attached so unknown adapters are reported instead of ignored.
+     */
+    private UsbDevice adapter_from_intent_or_bus() {
+        Intent intent = getIntent();
+        if (intent != null) {
+            UsbDevice device = (UsbDevice) intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+            if (device != null) {
+                return device;
+            }
+        }
+        UsbDevice fallback = null;
+        Map<String, UsbDevice> devices = _usb_manager.getDeviceList();
+        for (UsbDevice device : devices.values()) {
+            int vendor = device.getVendorId();
+            int product = device.getProductId();
+            if (vendor == 0x0bda && (product == 0x8187 || product == 0x8189
+                    || product == 0x8197 || product == 0x8198)) {
+                return device;
+            }
+            if (fallback == null) {
+                fallback = device;
+            }
+        }
+        return fallback;
+    }
+
+    private PendingIntent permission_pending_intent() {
+        Intent intent = new Intent(ACTION_USB_PERMISSION);
+        if (Build.VERSION.SDK_INT >= 31) {
+            return PendingIntent.getBroadcast(this, 0, intent, PendingIntent.FLAG_MUTABLE);
+        }
+        return PendingIntent.getBroadcast(this, 0, intent, 0);
     }
 
     private void request_runtime_permissions() {
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
             start_location_updates();
-        } else {
-            requestPermissions(new String[] { Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE }, REQUEST_PERMISSIONS);
+            return;
         }
+        requestPermissions(new String[] { Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE }, REQUEST_PERMISSIONS);
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         if (requestCode != REQUEST_PERMISSIONS) {
             return;
         }
-        for (int i = 0; i < permissions.length && i < grantResults.length; i++) {
+        for (int i = 0; i < permissions.length && i < results.length; i++) {
             if (Manifest.permission.ACCESS_FINE_LOCATION.equals(permissions[i])
-                    && grantResults[i] == PackageManager.PERMISSION_GRANTED) {
+                    && results[i] == PackageManager.PERMISSION_GRANTED) {
                 start_location_updates();
             }
         }
     }
 
+    /*
+     * Writes a GPS-tagged line alongside the frames so a capture can be placed
+     * on a map afterwards. Capture works without it, so failures are reported
+     * and then ignored.
+     */
     private void start_location_updates() {
-        _loc_manager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
-
+        _loc_manager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
         _loc_listener = new LocationListener() {
             public void onLocationChanged(Location location) {
-                String time = String.valueOf(location.getTime());
-                String lat = String.valueOf(location.getLatitude());
-                String lon = String.valueOf(location.getLongitude());
-                String alt = "NA";
-                if (location.hasAltitude()) {
-                    alt = String.valueOf(location.getAltitude());
-                }
-                String acc = "NA";
-                if (location.hasAccuracy()) {
-                    acc = String.valueOf(location.getAccuracy());
-                }
-                String speed = "NA";
-                if (location.hasSpeed()) {
-                    speed = String.valueOf(location.getSpeed());
-                }
-                String bearing = "NA";
-                if (location.hasBearing()) {
-                    bearing = String.valueOf(location.getBearing());
-                }
-                String provider = "NA";
-                if (location.getProvider() != null) {
-                    provider = location.getProvider();
-                }
-                String loc_reading_format = "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s.\n";
-                String reading = System.currentTimeMillis() + "\t"
-                        + String.format(loc_reading_format, time, lat, lon, alt, acc, speed, bearing, provider);
-                _txt_rx.append(reading);
-                write_log(reading);
+                String reading = System.currentTimeMillis() + "\tLOCATION\t"
+                        + location.getTime() + "\t" + location.getLatitude() + "\t"
+                        + location.getLongitude() + "\t"
+                        + (location.hasAltitude() ? location.getAltitude() : "NA") + "\t"
+                        + (location.hasAccuracy() ? location.getAccuracy() : "NA") + "\t"
+                        + (location.hasSpeed() ? location.getSpeed() : "NA") + "\t"
+                        + (location.hasBearing() ? location.getBearing() : "NA") + "\t"
+                        + (location.getProvider() == null ? "NA" : location.getProvider()) + "\n";
+                append_message(reading);
             }
 
-            public void onStatusChanged(String provider, int status, Bundle extras) {}
+            public void onStatusChanged(String provider, int status, Bundle extras) {
+            }
 
-            public void onProviderEnabled(String provider) {}
+            public void onProviderEnabled(String provider) {
+            }
 
-            public void onProviderDisabled(String provider) {}
+            public void onProviderDisabled(String provider) {
+            }
         };
 
         try {
@@ -382,33 +505,122 @@ public class MainActivity extends Activity {
                 _loc_manager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0, 0, _loc_listener);
             }
         } catch (SecurityException e) {
-            append_message("Location permission missing, capture will not be GPS-tagged.\n");
+            append_message("Location permission missing, the capture will not be GPS-tagged.\n");
         } catch (Exception e) {
-            append_message("Could not start location updates: " + e.getMessage() + "\n");
+            append_message("Could not start location updates: " + describe(e));
         }
+    }
+
+    private BroadcastReceiver usb_permission_receiver() {
+        return new BroadcastReceiver() {
+            public void onReceive(Context context, Intent intent) {
+                if (!ACTION_USB_PERMISSION.equals(intent.getAction())) {
+                    return;
+                }
+                UsbDevice device = (UsbDevice) intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+                if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                        && device != null) {
+                    start_driver(device);
+                } else {
+                    set_state(R.string.state_denied);
+                    append_message("USB permission denied. Relaunch and allow access to the adapter.\n");
+                }
+            }
+        };
+    }
+
+    private BroadcastReceiver finish_on_usb_detached() {
+        return new BroadcastReceiver() {
+            public void onReceive(Context context, Intent intent) {
+                if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(intent.getAction())) {
+                    append_message("Adapter detached, closing.\n");
+                    finish();
+                }
+            }
+        };
+    }
+
+    private void set_state(int string_id) {
+        set_state_text(getString(string_id));
+    }
+
+    private void set_state_text(final String text) {
+        _ui.post(new Runnable() {
+            public void run() {
+                ((TextView) findViewById(R.id.text_state)).setText(text);
+            }
+        });
+    }
+
+    // Frames are appended on the RX thread, so hop to the UI thread.
+    private void append_message(final String message) {
+        _ui.post(new Runnable() {
+            public void run() {
+                _text_log.append(message);
+                if (_text_log.getParent() instanceof View) {
+                    View parent = (View) _text_log.getParent();
+                    parent.scrollTo(0, _text_log.getBottom());
+                }
+            }
+        });
+        if (_osw_log != null && !message.isEmpty()) {
+            try {
+                _osw_log.write(System.currentTimeMillis() + "\t" + message);
+                _osw_log.flush();
+            } catch (IOException e) {
+                // the log is best effort
+            }
+        }
+    }
+
+    private static String describe_device(UsbDevice device) {
+        return String.format("0x%04x:0x%04x", device.getVendorId(), device.getProductId());
+    }
+
+    private static String format_mac(byte[] mac) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < mac.length; i++) {
+            if (i > 0) {
+                sb.append(':');
+            }
+            sb.append(String.format("%02X", mac[i]));
+        }
+        return sb.toString();
+    }
+
+    private static String describe(Exception e) {
+        StringBuilder sb = new StringBuilder(e.getClass().getSimpleName());
+        if (e.getMessage() != null) {
+            sb.append(": ").append(e.getMessage());
+        }
+        for (StackTraceElement line : e.getStackTrace()) {
+            sb.append("\n  at ").append(line);
+        }
+        return sb.append('\n').toString();
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.activity_main, menu);
+        return true;
     }
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        Intent intent;
-        switch (item.getItemId()) {
-            case R.id.menu_about:
-                intent = new Intent(this, AboutActivity.class);
-                startActivity(intent);
-                return true;
-            default:
-                return super.onOptionsItemSelected(item);
+        if (item.getItemId() == R.id.menu_about) {
+            startActivity(new Intent(this, AboutActivity.class));
+            return true;
         }
+        return super.onOptionsItemSelected(item);
     }
 
     @Override
     public void onDestroy() {
+        _ui.removeCallbacks(_status_tick);
         super.onDestroy();
+        stop_capture();
         if (_inject != null) {
             _inject.stop();
-        }
-        if (_rx != null) {
-            _rx.stopThread();
         }
         if (_conn != null) {
             if (_intf_0 != null) {
@@ -421,7 +633,7 @@ public class MainActivity extends Activity {
                 _osw_log.flush();
                 _osw_log.close();
             } catch (IOException e) {
-                e.printStackTrace();
+                // nothing useful to do while shutting down
             }
         }
         try {
@@ -438,107 +650,5 @@ public class MainActivity extends Activity {
             _loc_manager.removeUpdates(_loc_listener);
         }
         PcapWriter.close();
-    }
-
-    @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        getMenuInflater().inflate(R.menu.activity_main, menu);
-        return true;
-    }
-
-    private int rtl8187_probe(UsbDeviceConnection conn, UsbDevice device) {
-        // we (ab)use this to prime the DeviceProperties eeprom width cached value for other methods.
-        USBIO.get_eeprom_width(conn);
-        USBIO.perform_probe_black_magic_write_one(conn);
-        // another (ab)use to prime DeviceProperties, this time mac address.
-        USBIO.get_mac_address(conn);
-        USBIO.setup_channels_part_one(conn);
-        byte mysteryReg = USBIO.perform_probe_black_magic_read_write_one(conn);
-        // another (ab)use, this time asic revision priming.
-        USBIO.get_asic_revision(conn);
-        USBIO.perform_probe_black_magic_write_write_one(conn, mysteryReg);
-        // more priming (ab)use.
-        USBIO.get_hardware_revision(conn, device);
-        USBIO.setup_channels_part_two(conn);
-        // linux driver does some GPIO settings stuff here, but doesn't look like it applies to my AWUS 036H
-        // TODO: at the moment we don't make use of the return value to rtl818xRfOps here,
-        // but will need to if we want to support other cards in future.
-
-        // meant to behave (on the wire) like rtl8187_detect_rf() in the Linux Driver.
-        rtl818xRfOps ops = USBIO.rtl8187_detect_rf(conn, device);
-        USBIO.do_log = true;
-
-        // meant to behave (on the wire) like the conditional lines in #ifdef CONFIG_RTL8187_LEDS
-        // in the linux driver.
-        USBIO.config_rtl_8187_leds(conn);
-        // meant to behave (on the wire) like rtl8187_rfkill_init() in the Linux driver.
-        USBIO.rtl8187_rfkill_init(conn);
-        return 0;
-    }
-
-    private BroadcastReceiver usb_permission_receiver() {
-        return new BroadcastReceiver() {
-            public void onReceive(Context context, Intent intent) {
-                if (!ACTION_USB_PERMISSION.equals(intent.getAction())) {
-                    return;
-                }
-                UsbDevice device = (UsbDevice) intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
-                boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
-                if (granted && device != null) {
-                    start_driver(device);
-                } else {
-                    append_message("USB permission denied. Relaunch the app and allow access to the adapter.\n");
-                }
-            }
-        };
-    }
-
-    /*
-     * Sets up the activity to call finish() when the USB device is detached.
-     * The returned BroadcastReceiver would typically be unregistered in the activity's onDestroy().
-     * @return the BroadcastReceiver listening for the UsbManager.ACTION_USB_DEVICE_DETACHED event.
-     */
-    private BroadcastReceiver finish_on_usb_detached() {
-        // setup a receiver to be notified when the Wi-Fi card is removed.
-        BroadcastReceiver usb_detached_receiver = new BroadcastReceiver() {
-            public void onReceive(Context context, Intent intent) {
-                String action = intent.getAction();
-                // TODO: at the moment this assumes whatever was detached was *our* USB device.
-                // Might break with a hub and multiple devices.
-                if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
-                    UsbDevice device = (UsbDevice) intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
-                    if (device != null) {
-                        finish();
-                    }
-                }
-            }
-        };
-        return usb_detached_receiver;
-    }
-
-    private static String describe(Exception e) {
-        return e.getClass().toString() + "\n" + e.getMessage() + "\n" + e.getLocalizedMessage()
-                + "\n" + Arrays.toString(e.getStackTrace()) + "\n";
-    }
-
-    private void append_message(final String message) {
-        write_log(message);
-        runOnUiThread(new Runnable() {
-            public void run() {
-                _txt_rx.append(message);
-            }
-        });
-    }
-
-    private void write_log(String message) {
-        if (_osw_log == null) {
-            return;
-        }
-        try {
-            _osw_log.write(System.currentTimeMillis() + "\t" + message);
-            _osw_log.flush();
-        } catch (IOException e) {
-            // nothing useful to do here
-        }
     }
 }

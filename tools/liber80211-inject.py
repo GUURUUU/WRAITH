@@ -29,6 +29,17 @@ CMD_TX = 1
 CMD_CHANNEL = 2
 CMD_PING = 3
 CMD_STATUS = 4
+CMD_INFO = 5
+
+
+def recv_exactly(sock, count):
+    data = b""
+    while len(data) < count:
+        chunk = sock.recv(count - len(data))
+        if not chunk:
+            raise OSError("app closed the connection")
+        data += chunk
+    return data
 
 
 class Adapter:
@@ -64,6 +75,13 @@ class Adapter:
     def status(self):
         sent, channel = struct.unpack(">IB", self._request(CMD_STATUS, reply=5))
         return sent, channel
+
+    def info(self):
+        head = self._request(CMD_INFO, reply=2)
+        length = (head[0] << 8) | head[1]
+        if length == 0:
+            return ""
+        return recv_exactly(self.sock, length).decode("utf-8", "replace")
 
     def close(self):
         self.sock.close()
@@ -139,6 +157,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="frames transmitted and current channel")
+    sub.add_parser("info", help="full status summary as reported by the app")
     chan = sub.add_parser("channel", help="retune the radio")
     chan.add_argument("number", type=int)
 
@@ -171,7 +190,9 @@ def main():
     args = parser.parse_args()
     adapter = Adapter(args.host, args.port)
     try:
-        if args.command == "status":
+        if args.command == "info":
+            print(adapter.info(), end="")
+        elif args.command == "status":
             sent, channel = adapter.status()
             print(f"channel {channel or 'unknown'}, {sent} frames transmitted")
         elif args.command == "channel":

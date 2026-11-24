@@ -1,0 +1,204 @@
+#!/data/data/com.termux/files/usr/bin/bash
+#
+# liber - one command for everything liber80211 does on the phone.
+#
+#   liber info                 what the app is doing right now
+#   liber channel 6            retune the radio
+#   liber deauth <bssid> [sta] send a deauth
+#   liber beacon "SSID"        broadcast a beacon
+#   liber raw <hex>            send a raw 802.11 frame
+#   liber replay <file.pcap>   replay a capture
+#   liber capture ls           list captures
+#   liber capture pull [dir]   copy captures somewhere safe
+#   liber capture info         summarise capture.pcap
+#   liber log [-f]             show (or follow) the newest log
+#   liber doctor               check the install and the app
+#
+# Injection commands need the app running with the adapter attached.  Capture
+# and log commands only read /sdcard/liber80211, which needs termux-setup-storage
+# or the storage permission granted to Termux.
+
+set -u
+
+CAPTURE_DIR="${LIBER80211_DIR:-/sdcard/liber80211}"
+APP_ID="com.brycestrosoft.liber80211"
+export PATH="$PATH:$HOME/bin"
+
+die() {
+    echo "liber: $*" >&2
+    exit 1
+}
+
+# Termux ships python3; some hosts only have python.
+PY=$(command -v python3 || command -v python || true)
+
+find_client() {
+    local candidate
+    for candidate in \
+        "${LIBER80211_CLIENT:-}" \
+        "$PREFIX/lib/liber80211/liber80211-inject.py" \
+        "$(dirname "$(readlink -f "$0")")/liber80211-inject.py" \
+        "./tools/liber80211-inject.py" \
+        "$HOME/liber80211/liber80211-inject.py"; do
+        if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+need_client() {
+    CLIENT=$(find_client) || die "cannot find liber80211-inject.py (set LIBER80211_CLIENT)"
+    [ -n "$PY" ] || die "python3 is missing, run: pkg install python"
+}
+
+newest_log() {
+    ls -t "$CAPTURE_DIR"/liber80211_*.txt 2>/dev/null | head -n 1
+}
+
+usage() {
+    sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+case "${1:-}" in
+    info|status)
+        need_client
+        exec "$PY" "$CLIENT" info
+        ;;
+
+    channel)
+        [ $# -ge 2 ] || die "usage: liber channel <1-14>"
+        need_client
+        exec "$PY" "$CLIENT" channel "$2"
+        ;;
+
+    deauth)
+        [ $# -ge 2 ] || die "usage: liber deauth <bssid> [client] [--count N]"
+        need_client
+        command="$1"; shift
+        exec "$PY" "$CLIENT" "$command" "$@"
+        ;;
+
+    beacon|raw|replay)
+        [ $# -ge 2 ] || die "usage: liber $1 <argument> [options]"
+        need_client
+        command="$1"; shift
+        exec "$PY" "$CLIENT" "$command" "$@"
+        ;;
+
+    capture)
+        sub="${2:-ls}"
+        case "$sub" in
+            ls)
+                [ -d "$CAPTURE_DIR" ] || die "no capture directory at $CAPTURE_DIR"
+                ls -lh "$CAPTURE_DIR"
+                ;;
+            pull)
+                dest="${3:-$HOME/liber80211-captures}"
+                [ -d "$CAPTURE_DIR" ] || die "no capture directory at $CAPTURE_DIR"
+                mkdir -p "$dest" || die "cannot create $dest"
+                cp -v "$CAPTURE_DIR"/capture.pcap "$dest"/ 2>/dev/null
+                for f in $(ls -t "$CAPTURE_DIR"/liber80211_*.txt 2>/dev/null | head -n 5); do
+                    cp -v "$f" "$dest"/
+                done
+                echo "copied to $dest"
+                ;;
+            info)
+                [ -f "$CAPTURE_DIR/capture.pcap" ] || die "no capture.pcap yet"
+                [ -n "$PY" ] || die "python3 is missing, run: pkg install python"
+                "$PY" - "$CAPTURE_DIR/capture.pcap" <<'PYSCRIPT'
+import collections, struct, sys, time
+
+path = sys.argv[1]
+data = open(path, "rb").read()
+if len(data) < 24:
+    sys.exit("capture.pcap is truncated")
+magic = data[:4]
+endian = "<" if magic in (b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1") else ">"
+linktype = struct.unpack(endian + "I", data[20:24])[0]
+offset, frames, first, last = 24, 0, None, None
+types = collections.Counter()
+bssids = set()
+while offset + 16 <= len(data):
+    ts, _, incl, _ = struct.unpack(endian + "IIII", data[offset:offset + 16])
+    offset += 16
+    frame = data[offset:offset + incl]
+    offset += incl
+    if len(frame) < 2:
+        continue
+    frames += 1
+    first = ts if first is None else first
+    last = ts
+    fc = frame[0] | (frame[1] << 8)
+    kind = {0: "management", 1: "control", 2: "data"}.get((fc >> 2) & 3, "other")
+    if kind == "management":
+        kind = {0: "assoc", 1: "assoc-resp", 2: "reassoc", 3: "reassoc-resp",
+                4: "probe-req", 5: "probe-resp", 8: "beacon", 10: "disassoc",
+                11: "auth", 12: "deauth", 13: "action"}.get((fc >> 4) & 15, "management")
+    types[kind] += 1
+    if kind == "beacon" and len(frame) >= 22:
+        bssids.add(frame[16:22].hex(":"))
+
+print(f"file      : {path}")
+print(f"link type : {linktype}")
+print(f"frames    : {frames}")
+if first is not None:
+    print(f"window    : {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(first))}"
+          f" .. {time.strftime('%H:%M:%S', time.localtime(last))}")
+print(f"bssids    : {len(bssids)}")
+for kind, count in types.most_common():
+    print(f"  {kind:<14} {count}")
+PYSCRIPT
+                ;;
+            *)
+                die "usage: liber capture [ls|pull [dir]|info]"
+                ;;
+        esac
+        ;;
+
+    log)
+        log=$(newest_log)
+        [ -n "$log" ] || die "no log files in $CAPTURE_DIR"
+        if [ "${2:-}" = "-f" ]; then
+            exec tail -f "$log"
+        fi
+        echo "$log"
+        tail -n "${2:-25}" "$log"
+        ;;
+
+    doctor)
+        echo "capture dir : $CAPTURE_DIR"
+        if [ -d "$CAPTURE_DIR" ]; then
+            echo "  readable  : yes ($(ls "$CAPTURE_DIR" | wc -l) files)"
+        else
+            echo "  readable  : no - run termux-setup-storage, or the app has not run yet"
+        fi
+        if [ -n "$PY" ]; then
+            echo "python      : $("$PY" -V 2>&1)"
+        else
+            echo "python3     : missing (pkg install python)"
+        fi
+        if command -v nc >/dev/null 2>&1; then
+            if printf '\003' | timeout 3 nc 127.0.0.1 8765 >/dev/null 2>&1; then
+                echo "app socket  : answering on 127.0.0.1:8765"
+            else
+                echo "app socket  : not answering - start liber80211 with the adapter attached"
+            fi
+        fi
+        if command -v cmd >/dev/null 2>&1; then
+            echo "usb host    : $(cmd usb 2>/dev/null | head -n 1 || echo unknown)"
+        fi
+        ;;
+
+    help|-h|--help|"")
+        usage
+        ;;
+
+    *)
+        echo "liber: unknown command '$1'" >&2
+        echo >&2
+        usage >&2
+        exit 1
+        ;;
+esac

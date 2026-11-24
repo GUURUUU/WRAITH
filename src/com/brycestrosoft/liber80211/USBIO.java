@@ -378,8 +378,6 @@ public class USBIO {
 			0x09dc, 0x0a5c, 0x0adc, 0x0b5c, 0x0bdc, 0x0c5c, 0x0cdc, 0x0d5c,
 			0x0ddc, 0x0e5c, 0x0f72 };
 
-	public static volatile int current_channel = 0;
-
 	/*
 	 * Retunes the radio, mirroring rtl8225_rf_set_channel() from rtl8225.c.
 	 * Only the synthesiser write is done: the per-channel TX power correction is
@@ -394,7 +392,7 @@ public class USBIO {
 		rtl8225Write(conn, 0x7, ByteBuffer.allocate(2)
 				.putShort((short) RTL8225_CHANNEL_WORDS[channel - 1]).array());
 		milliSleep(10);
-		current_channel = channel;
+		Stats.CHANNEL.set(channel);
 		writeMessage("Tuned to channel " + channel + ".\n");
 		return true;
 	}
@@ -426,6 +424,9 @@ public class USBIO {
 		System.arraycopy(frame, 0, packet, 12, frame.length);
 
 		int sent = conn.bulkTransfer(out, packet, packet.length, 500);
+		if (sent == packet.length) {
+			Stats.TX_FRAMES.incrementAndGet();
+		}
 		writeMessage(String.format("TX %d byte frame (rate index %d): %d bytes accepted\n",
 				frame.length, rate, sent));
 		return sent;
